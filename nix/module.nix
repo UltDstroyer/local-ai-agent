@@ -51,15 +51,16 @@ in {
   config = mkIf cfg.enable (mkMerge [
     {
       users.groups.ctx-agent-users = {};
-      users.users.ctx-agent = {
-        isSystemUser = true;
-        group = "ctx-agent-users";
-        home = "/var/lib/ctx-agent";
-        description = "Unprivileged isolated local AI coordinator";
-      };
-      users.users = lib.genAttrs cfg.operatorUsers (_: {
+      users.users = (lib.genAttrs cfg.operatorUsers (_: {
         extraGroups = [ "ctx-agent-users" ];
-      });
+      })) // {
+        ctx-agent = {
+          isSystemUser = true;
+          group = "ctx-agent-users";
+          home = "/var/lib/ctx-agent";
+          description = "Unprivileged isolated local AI coordinator";
+        };
+      };
       environment.systemPackages = [ package ];
       systemd.tmpfiles.rules = [
         "d /var/lib/ctx-agent/projects 0770 ctx-agent ctx-agent-users - -"
