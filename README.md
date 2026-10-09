@@ -64,3 +64,31 @@ The Nix package also installs ctx-agent-media. It can use your manually configur
 - The original policy evaluator is retained for classification and tests; it is NOT a replacement for OS isolation.
 
 Design: docs/SECURITY.md, docs/NIXOS.md, docs/ROADMAP.md. This version is a practical foundation rather than unrestricted machine control.
+
+## Context Switcher integration
+
+The separate [context_switcher](https://github.com/UltDstroyer/context_switcher)
+CLI now has an optional `ctx agent` dispatcher (integration PR #2).
+Once BOTH NixOS modules are installed, you can use the current context name
+as the AI project and control queued tasks without switching commands:
+
+    ctx switch research
+    ctx agent import ~/src/research-project
+    ctx agent submit "Review the tests and propose a fix"
+    ctx agent status
+    ctx agent mode quiet
+    ctx agent list
+    ctx agent diff JOB_ID
+    ctx agent apply JOB_ID
+
+Use `ctx agent submit --project some_project "Task"` to override the current
+context. GPU modes and task inspection work even without an active context.
+The media companion is forwarded as `ctx agent media record start` and other
+explicit owner commands; the AI cannot silently start recording.
+
+Context switches do NOT cancel ongoing background agent work.
+Updating one repository alone will NOT install the other one. The ctx
+integration is backwards compatible: without the agent installed it displays
+an error rather than trying an alternative executor.
+
+The ctx repo documents full Nix flake integration in docs/AGENT.md.
