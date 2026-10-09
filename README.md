@@ -79,7 +79,7 @@ as the AI project and control queued tasks without switching commands:
     ctx agent mode quiet
     ctx agent list
     ctx agent diff JOB_ID
-    ctx agent apply JOB_ID
+    ctx agent apply JOB_ID    # applies to agent-managed copy ONLY
 
 Use `ctx agent submit --project some_project "Task"` to override the current
 context. GPU modes and task inspection work even without an active context.
@@ -92,3 +92,13 @@ integration is backwards compatible: without the agent installed it displays
 an error rather than trying an alternative executor.
 
 The ctx repo documents full Nix flake integration in docs/AGENT.md.
+
+### Imported project boundaries
+
+A source import copies filtered source files into the service's managed project
+directory. Both ctx-agent apply and ctx agent apply update that **managed copy**;
+neither writes automatically into the original Git checkout you imported from.
+An export/sync command with original-file conflict checks and explicit user
+approval is not implemented in this preview. Until it exists, inspect the
+diff and manually transfer the approved changes to your original repo.
+
