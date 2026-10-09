@@ -135,3 +135,25 @@ def apply(source: Path, scratch: Path):
             shutil.copyfileobj(inp, out)
         os.replace(temp, dst)
     return changed
+
+
+def import_files(source: Path, destination: Path) -> list[str]:
+    """User-invoked import into a newly initialized project.
+
+    The caller must have owner permission to write the destination. This
+    deliberately runs in the interactive CLI, not the background service,
+    so the daemon never needs access to the user's home directory.
+    """
+    if not source.is_dir() or source.is_symlink():
+        raise SnapshotError("Source must be a real project directory")
+    if not destination.is_dir() or destination.is_symlink():
+        raise SnapshotError("Destination must be a real project directory")
+    files = inventory(source)
+    for rel, src in files.items():
+        output = destination / rel
+        output.parent.mkdir(parents=True, exist_ok=True)
+        if output.is_symlink() or output.exists():
+            raise SnapshotError("Refusing to overwrite: " + rel)
+        with src.open("rb") as stream, output.open("xb") as copied:
+            shutil.copyfileobj(stream, copied)
+    return sorted(files)

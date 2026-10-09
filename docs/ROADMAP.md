@@ -22,7 +22,8 @@
 - [x] Python source read/write and offline unittest/compile checks
 - [x] Per-project user-provided notes
 - [ ] Package manager and multi-language test runners with stronger sandbox profiles
-- [ ] Git worktree branch/PR integration and configurable project import
+- [x] Sanitized import of a source directory from owner CLI
+- [ ] Git worktree branch/PR integration
 
 ## 3. Adaptive resources and media
 

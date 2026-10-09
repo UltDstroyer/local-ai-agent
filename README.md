@@ -30,8 +30,8 @@ Untrusted work happens only inside an allowlisted source-code snapshot. The daem
 ## Use
 
     ctx-agent health
-    ctx-agent init demo
-    # Copy ordinary source files to /var/lib/ctx-agent/projects/demo
+    ctx-agent import demo ~/src/your-project
+    # import creates a new named project from sanitized source files
     ctx-agent submit demo "Inspect this project and fix failing Python tests"
     ctx-agent list
     ctx-agent events JOB_ID

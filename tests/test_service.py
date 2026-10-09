@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from ctx_agent.runtime import Settings, sensitive, valid_name
-from ctx_agent.snapshot import SnapshotError, apply, create, diff, project_path
+from ctx_agent.snapshot import SnapshotError, apply, create, diff, project_path, import_files
 from ctx_agent.sandbox import command, file_tool, SandboxError
 from ctx_agent.server import Coordinator
 from ctx_agent.store import Store
@@ -66,6 +66,15 @@ class TestSnapshot(unittest.TestCase):
         self.assertEqual(apply(self.source, self.scratch), changed)
         self.assertEqual((self.source / "main.py").read_text(), "updated\n")
         self.assertTrue((self.source / "untouched.py").exists())
+
+    def test_import_filters_private_files(self):
+        dest = self.root / "imported"
+        dest.mkdir()
+        (self.source / "public.py").write_text("print(42)")
+        (self.source / ".env").write_text("PASSWORD=secret")
+        paths = import_files(self.source, dest)
+        self.assertEqual(paths, ["public.py"])
+        self.assertFalse((dest / ".env").exists())
 
     def test_project_path_rejects_traversal(self):
         with self.assertRaises(SnapshotError):

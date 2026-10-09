@@ -28,3 +28,22 @@ jobs:
         run: nix flake show --show-trace
       - name: Build package
         run: nix build .#packages.x86_64-linux.default --show-trace
+      - name: Evaluate NixOS module
+        run: |
+          nix eval --raw --impure --expr '
+            let
+              flake = builtins.getFlake (toString ./.);
+              configuration = flake.inputs.nixpkgs.lib.nixosSystem {
+                system = "x86_64-linux";
+                modules = [
+                  flake.nixosModules.default
+                  ({ ... }: {
+                    system.stateVersion = "26.05";
+                    services.ctxAgent.enable = true;
+                    services.ctxAgent.operatorUsers = [ "testuser" ];
+                    users.users.testuser.isNormalUser = true;
+                  })
+                ];
+              };
+            in configuration.config.systemd.services.ctx-agent.serviceConfig.ExecStart
+          '

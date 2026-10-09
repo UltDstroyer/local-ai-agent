@@ -34,6 +34,11 @@ in {
       default = false;
       description = "Enable NixOS Ollama without downloading a model.";
     };
+    gpuBackend = mkOption {
+      type = types.enum [ "rocm" "vulkan" "cpu" ];
+      default = "rocm";
+      description = "Acceleration backend when ctx-agent manages Ollama. ROCm is the AMD default.";
+    };
     maxSteps = mkOption {
       type = types.ints.between 1 32;
       default = 12;
@@ -103,6 +108,14 @@ in {
         };
       };
     }
-    (mkIf cfg.manageOllama { services.ollama.enable = true; })
+    (mkIf cfg.manageOllama {
+      services.ollama = {
+        enable = true;
+        package =
+          if cfg.gpuBackend == "rocm" then pkgs.ollama-rocm
+          else if cfg.gpuBackend == "vulkan" then pkgs.ollama-vulkan
+          else pkgs.ollama-cpu;
+      };
+    })
   ]);
 }

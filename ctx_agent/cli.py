@@ -43,6 +43,9 @@ def main(argv=None):
         x.add_argument("project")
     x = sub.add_parser("mode")
     x.add_argument("mode", choices=("quiet", "balanced", "maximum"))
+    x = sub.add_parser("import")
+    x.add_argument("project")
+    x.add_argument("source", type=Path)
     x = sub.add_parser("submit")
     x.add_argument("project")
     x.add_argument("prompt", help="Quoted natural-language task for Ollama")
@@ -59,7 +62,15 @@ def main(argv=None):
         if hasattr(args, field):
             data[field] = getattr(args, field)
     try:
-        result = call(args.socket, data)
+        if args.action == "import":
+            from .snapshot import import_files
+            from .snapshot import SnapshotError
+            source = args.source.expanduser().resolve(strict=True)
+            dest = call(args.socket, {"op": "init", "project": args.project})
+            result = {"project": args.project,
+                      "copied": import_files(source, Path(dest["path"]))}
+        else:
+            result = call(args.socket, data)
         if args.action == "diff":
             print(result["diff"])
             print("Changed:", ", ".join(result["changed"]))
