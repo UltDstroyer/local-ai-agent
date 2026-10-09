@@ -13,6 +13,7 @@ dependencies = []
 ctx-agent = "ctx_agent.cli:main"
 ctx-agent-server = "ctx_agent.server:main"
 ctx-agent-media = "ctx_agent.media:main"
+ctx-ext-agent = "ctx_agent.context_extension:main"
 
 [tool.setuptools.packages.find]
 include = ["ctx_agent*"]

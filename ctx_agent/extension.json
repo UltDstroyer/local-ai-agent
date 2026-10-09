@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "agent",
+  "name": "Local AI Agent",
+  "entrypoint": "ctx-ext-agent",
+  "extension_api": 1,
+  "description": "Local Ollama coding agent, queued jobs, controlled media commands",
+  "repository": "UltDstroyer/local-ai-agent",
+  "capabilities": [
+    "tasks",
+    "project-notes",
+    "resource-modes",
+    "owner-initiated-media"
+  ],
+  "lifecycle": "none",
+  "security": "No additional privilege from Context Switcher; see docs/SECURITY.md"
+}

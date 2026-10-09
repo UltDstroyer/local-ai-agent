@@ -65,33 +65,39 @@ The Nix package also installs ctx-agent-media. It can use your manually configur
 
 Design: docs/SECURITY.md, docs/NIXOS.md, docs/ROADMAP.md. This version is a practical foundation rather than unrestricted machine control.
 
-## Context Switcher integration
+## Context Switcher extension
 
-The separate [context_switcher](https://github.com/UltDstroyer/context_switcher)
-CLI now has an optional `ctx agent` dispatcher (integration PR #2).
-Once BOTH NixOS modules are installed, you can use the current context name
-as the AI project and control queued tasks without switching commands:
+**Context Switcher is the main platform.** This repository implements
+an opt-in Extension API v1 adapter: the installed executable
+ctx-ext-agent. The core does not contain any AI-specific arguments,
+model logic, background service or video implementation.
 
+When both packages are installed, Context Switcher discovers the command
+via PATH, with no plugin registration or changes to the core repository:
+
+    ctx extensions
     ctx switch research
     ctx agent import ~/src/research-project
-    ctx agent submit "Review the tests and propose a fix"
+    ctx agent submit "Investigate failing tests"
     ctx agent status
     ctx agent mode quiet
     ctx agent list
     ctx agent diff JOB_ID
-    ctx agent apply JOB_ID    # applies to agent-managed copy ONLY
+    ctx agent apply JOB_ID
 
-Use `ctx agent submit --project some_project "Task"` to override the current
-context. GPU modes and task inspection work even without an active context.
-The media companion is forwarded as `ctx agent media record start` and other
-explicit owner commands; the AI cannot silently start recording.
+Use ctx agent submit --project NAME "Task" if no context is active or to
+target a different managed project. Video commands such as
+ctx agent media record start remain explicitly initiated by the owner.
 
-Context switches do NOT cancel ongoing background agent work.
-Updating one repository alone will NOT install the other one. The ctx
-integration is backwards compatible: without the agent installed it displays
-an error rather than trying an alternative executor.
+The ctx-extension manifest is in ctx_agent/extension.json, and the adapter
+and its tests live in ctx_agent/context_extension.py and
+tests/test_context_extension.py. The extension runs standalone as
+ctx-ext-agent even when the ctx CLI is absent.
 
-The ctx repo documents full Nix flake integration in docs/AGENT.md.
+The stable plugin interface is documented in the Context Switcher
+repository at docs/EXTENSIONS.md. To install, add the independent
+local-ai-agent NixOS module as described in this README. Installing
+Context Switcher alone never installs or enables the AI extension.
 
 ### Imported project boundaries
 
