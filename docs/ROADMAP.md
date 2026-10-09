@@ -1,38 +1,43 @@
-# Roadmap
+# Implementation milestones and status
 
-## Milestone 0: security foundation (this branch)
+## 0. Security contract
 
-- [x] Record user-selected expanded access / critical approvals / authorized desktop policy.
-- [x] Define permanently forbidden operations and sensitive-path defaults.
-- [x] Implement deterministic, fail-closed policy inspection CLI.
-- [x] Add tests for protected paths, symlinks, sensitive filenames, approval requirements and unknown operations.
-- [x] Define NixOS isolation and desktop-broker blueprint.
-- [ ] Validate host-specific private mounts, secrets and systemd restrictions on the actual NixOS desktop.
-- [ ] Threat-review policy with the owner, especially broad home write access and personal data.
+- [x] Untrusted AI tools separated from host service
+- [x] Protected-file policy evaluator and tests
+- [x] No arbitrary host shell and no credentials exposed to worker
+- [ ] Host-specific isolation tests with real protected folders
 
-## Milestone 1: enforceable sandbox and quiet service
+## 1. Local service and task coordination
 
-- [ ] Unprivileged worker UID and trusted policy controller with root-owned configuration.
-- [ ] Namespace/mount restrictions, process limits and network restrictions validated by escape tests.
-- [ ] SQLite task queue with pause/stop and immutable audit trail.
-- [ ] Typed, expiring, single-purpose approval grants through a trusted UI.
-- [ ] Systemd service installation only after explicit owner approval.
+- [x] SQLite persistent job queue and event log
+- [x] Unix-socket CLI, pause/resume, cancel, status, review/apply
+- [x] NixOS module, dedicated service account, sandboxed project copy
+- [ ] Confirm NixOS module builds and Bubblewrap works on the target desktop
+- [ ] Make active cancellation interrupt running model HTTP and sandbox operations immediately
+- [ ] Atomic conflict-safe patch application to concurrently edited source
 
-## Milestone 2: local action tools
+## 2. Autonomous local development
 
-- [ ] Safe file tools implemented against authorized file descriptors.
-- [ ] Restricted task shell isolated by Linux, not only command filtering.
-- [ ] Git worktrees, executable test suites and bounded job output.
-- [ ] Download and upload gates with network and data-exfiltration controls.
+- [x] Local Ollama tool-loop with bounded steps
+- [x] Python source read/write and offline unittest/compile checks
+- [x] Per-project user-provided notes
+- [ ] Package manager and multi-language test runners with stronger sandbox profiles
+- [ ] Git worktree branch/PR integration and configurable project import
 
-## Milestone 3: autonomous local reasoning
+## 3. Adaptive resources and media
 
-- [ ] Ollama backend, bounded tool-call loops and budget controls.
-- [ ] Project/task memory stores, redaction and retention controls.
-- [ ] Sandboxed retry, rollback, and explicit escalation on repeated failures.
+- [x] Quiet/balanced/maximum model request profiles (quiet still uses GPU)
+- [x] Opt-in companion: OBS recording control, owner-voice reference, F5-TTS and ffmpeg integration
+- [ ] Load-aware GPU scheduling, VRAM telemetry and application priority detection
+- [ ] Desktop consent GUI and agent-requested video/narration grants
+- [ ] Verify speech synthesis and GPU compatibility on Radeon ROCm
 
-## Milestone 4: contexts and device integration
+## 4. Integrated computer agent
 
-- [ ] ctx context memory and permissions mapping.
-- [ ] Portal-based opt-in desktop broker with per-task access.
-- [ ] Authenticated remote bridge for laptop, Pi and ChatGPT; no public unauthenticated execution endpoint.
+- [ ] Trusted desktop broker (active-window checks, portal consent and revocation)
+- [ ] Expanded host filesystem access through reviewed broker, not an unsafe root shell
+- [ ] ctx context lifecycle hooks
+- [ ] Authenticated ChatGPT bridge and distributed laptop/Pi workers
+- [ ] Full end-to-end host security and regression test suite
+
+**Release state:** Technical preview. Do not call this fully unattended, host-wide, or plug-and-play yet.

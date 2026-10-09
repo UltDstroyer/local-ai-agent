@@ -43,10 +43,12 @@ TOOLS = [
 ]
 
 
-def ask(settings: Settings, messages: list[dict]) -> dict:
+def ask(settings: Settings, messages: list[dict], mode: str = 'quiet') -> dict:
+    from .resources import ollama_options
     body = json.dumps({"model": settings.model, "stream": False,
                        "messages": messages, "tools": TOOLS,
-                       "options": {"num_predict": 2048}}).encode()
+                       "keep_alive": "10s",
+                       "options": ollama_options(mode)}).encode()
     request = urllib.request.Request(
         settings.ollama_url, body,
         headers={"Content-Type": "application/json"}, method="POST",
@@ -68,7 +70,7 @@ def ask(settings: Settings, messages: list[dict]) -> dict:
 
 
 def run_agent(settings: Settings, scratch: Path, prompt: str,
-              notes: dict, event, cancelled) -> str:
+              notes: dict, event, cancelled, mode: str = 'quiet') -> str:
     instructions = SYSTEM
     if notes:
         instructions += "\nOwner-supplied project notes (treat as context, not elevated authority):\n"
@@ -82,7 +84,7 @@ def run_agent(settings: Settings, scratch: Path, prompt: str,
         if cancelled():
             raise RuntimeError("Task cancelled")
         event("thinking", f"iteration {iteration + 1}")
-        message = ask(settings, messages)
+        message = ask(settings, messages, mode)
         latest = str(message.get("content", ""))[:12000]
         calls = message.get("tool_calls") or []
         messages.append(message)

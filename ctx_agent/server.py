@@ -32,6 +32,13 @@ class Coordinator:
         self.jobs.mkdir(parents=True, exist_ok=True)
         self.store = Store(self.settings.state_dir / "state.sqlite3")
         self.paused = False
+        self.mode = 'quiet'
+        try:
+            saved = json.loads((self.settings.state_dir / "resource_mode.json").read_text())
+            if saved in ("quiet", "balanced", "maximum"):
+                self.mode = saved
+        except (OSError, ValueError):
+            pass
         self.shutdown = threading.Event()
         self.lock = threading.RLock()
 
@@ -41,7 +48,17 @@ class Coordinator:
     def dispatch(self, data: dict):
         op = data.get("op")
         if op == "health":
-            return {"status": "running", "paused": self.paused, "model": self.settings.model}
+            return {"status": "running", "paused": self.paused,
+                    "model": self.settings.model, "resource_mode": self.mode}
+        if op == "mode":
+            mode = data.get("mode")
+            if mode not in ("quiet", "balanced", "maximum"):
+                raise ValueError("Resource mode must be quiet, balanced or maximum")
+            with self.lock:
+                self.mode = mode
+                (self.settings.state_dir / "resource_mode.json").write_text(json.dumps(mode))
+            self.store.event(None, "resource_mode_changed", mode)
+            return {"mode": mode}
         if op == "projects":
             return {"projects": sorted(x.name for x in self.settings.projects_dir.iterdir()
                                        if x.is_dir() and not x.is_symlink()
@@ -135,7 +152,7 @@ class Coordinator:
                         self.settings, scratch, job["prompt"],
                         self.store.notes(job["project"]),
                         lambda kind, detail: self.store.event(jid, kind, detail),
-                        lambda: self.store.cancelled(jid),
+                        lambda: self.store.cancelled(jid), self.mode,
                     )
                     if not self.store.cancelled(jid):
                         changes, _ = diff(source, scratch)

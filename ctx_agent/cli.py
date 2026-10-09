@@ -41,6 +41,8 @@ def main(argv=None):
     for cmd in ("init", "notes"):
         x = sub.add_parser(cmd)
         x.add_argument("project")
+    x = sub.add_parser("mode")
+    x.add_argument("mode", choices=("quiet", "balanced", "maximum"))
     x = sub.add_parser("submit")
     x.add_argument("project")
     x.add_argument("prompt", help="Quoted natural-language task for Ollama")
@@ -53,7 +55,7 @@ def main(argv=None):
     x.add_argument("text")
     args = parser.parse_args(argv)
     data = {"op": args.action}
-    for field in ("project", "prompt", "id", "key", "text"):
+    for field in ("project", "prompt", "id", "key", "text", "mode"):
         if hasattr(args, field):
             data[field] = getattr(args, field)
     try:

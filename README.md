@@ -1,31 +1,66 @@
 # ctx-agent
 
-Local-first AI agent for NixOS, built around user-controlled permissions, isolated workers and quiet background operation.
+Local-first AI coding assistant for NixOS. Work is queued persistently and processed through a local Ollama model. Untrusted file tools and test runs use offline Bubblewrap namespaces against disposable source-code snapshots. No Codex usage is needed.
 
-**Current status: Milestone 0 only.** This repository currently provides a Python policy classifier and security design documents. It **cannot** run commands, access the desktop, enforce Linux filesystem permissions, store agent memories or autonomously execute tasks yet.
+**Status: technical preview, not yet host-verified.** Python tests run in GitHub CI. NixOS installation, Bubblewrap user namespaces, Ollama ROCm offloading and OBS interaction still require a test on your own hardware. Do not treat the security sandbox as audited.
 
-## Your selected policy
+## Install as a NixOS flake module
 
-- **Expanded filesystem access:** ordinary reads/writes allowed by policy outside protected paths; subject to real OS permissions.
-- **Critical approval:** destructive changes, system configuration, deployment, uploads and other critical operations require trusted user authorization.
-- **Authorized desktop interaction:** screen observation and input require explicit per-task consent. Background screen capture is permanently forbidden.
+In the inputs of your current system flake add:
 
-## Dry-run the policy
+    ctx-agent.url = "github:UltDstroyer/local-ai-agent/milestone-0-security";
 
-Requires Python 3.11+; no third-party Python dependencies.
+and include the module in your system modules list:
 
-    python -m unittest discover -s tests -v
-    python -m ctx_agent filesystem.read /home/USER/projects/example.py
-    python -m ctx_agent filesystem.write /etc/nixos/configuration.nix
-    python -m ctx_agent desktop.control
-    python -m ctx_agent command.execute
+    ctx-agent.nixosModules.default
 
-The CLI only reports allow / deny / approval_required. It never performs those operations. Non-allow results return exit code 3; invalid policy returns 2.
+Then in your NixOS module configuration:
 
-## Documents
+    services.ctxAgent = {
+      enable = true;
+      operatorUsers = [ "lena" ]; # replace if your login differs
+      manageOllama = true; # false if you already manage Ollama
+      model = "qwen3:8b";
+    };
 
-- [Threat model and security policy](docs/SECURITY.md)
-- [NixOS service and sandbox plan](docs/NIXOS.md)
-- [Milestones and acceptance gates](docs/ROADMAP.md)
+Review your configuration and rebuild with your existing nixos-rebuild workflow. Manually download the model using ollama pull qwen3:8b. Log out and back in so your group membership is refreshed.
 
-**Important:** Real security will come from a separate Linux identity, kernel-enforced sandbox, restricted sockets, and a trusted approval broker. Never use an allow result from this classifier as permission to execute arbitrary shell commands outside a sandbox.
+Untrusted work happens only inside an allowlisted source-code snapshot. The daemon cannot inspect your usual /home, browser or credentials, and the model cannot apply edits to an original project on its own.
+
+## Use
+
+    ctx-agent health
+    ctx-agent init demo
+    # Copy ordinary source files to /var/lib/ctx-agent/projects/demo
+    ctx-agent submit demo "Inspect this project and fix failing Python tests"
+    ctx-agent list
+    ctx-agent events JOB_ID
+    ctx-agent diff JOB_ID
+    ctx-agent apply JOB_ID # human review required
+
+Only the local owner CLI can request apply; agent tools do not expose it. Apply does not delete files, though it can replace ordinary project files. Inspect the diff before approving.
+
+## Resource modes
+
+    ctx-agent mode quiet      # DEFAULT: GPU on, 6 layers, 2 CPU threads
+    ctx-agent mode balanced   # GPU on, 18 layers, 4 CPU threads
+    ctx-agent mode maximum    # no voluntary GPU-layer or CPU-thread cap
+    ctx-agent pause
+    ctx-agent resume
+
+The Ollama GPU budgets are *hints*, not fixed VRAM or GPU-compute shares. Quiet inference may still temporarily stress the GPU. Details: docs/RESOURCES.md.
+
+## Video and your own voice (separate desktop companion)
+
+The Nix package also installs ctx-agent-media. It can use your manually configured OBS WebSocket scene for an explicitly started recording, enroll a voice reference, produce F5-TTS narration, and mix WAV narration onto MP4 video with ffmpeg. These features cannot be called autonomously by the AI worker, and F5-TTS itself must be installed separately for the Radeon ROCm environment. See docs/MEDIA.md.
+
+## Access and privacy
+
+- Trusted users in the ctx-agent-users group can submit tasks and request review/apply.
+- No remote listener or ChatGPT connection is enabled.
+- Model data goes to the Ollama service at loopback only.
+- No arbitrary host shell command tool, sudo escalation, or unattended GUI access.
+- Sensitive names, symlinks and hidden tool/cache folders are filtered when making snapshots.
+- The original policy evaluator is retained for classification and tests; it is NOT a replacement for OS isolation.
+
+Design: docs/SECURITY.md, docs/NIXOS.md, docs/ROADMAP.md. This version is a practical foundation rather than unrestricted machine control.
