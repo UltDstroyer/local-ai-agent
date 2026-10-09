@@ -4,10 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ctx-agent"
-version = "0.0.1"
-description = "A local-first AI agent with a fail-closed security policy"
+version = "0.1.0"
+description = "Sandboxed local task agent for NixOS"
 requires-python = ">=3.11"
 dependencies = []
+
+[project.scripts]
+ctx-agent = "ctx_agent.cli:main"
+ctx-agent-server = "ctx_agent.server:main"
 
 [tool.setuptools.packages.find]
 include = ["ctx_agent*"]
