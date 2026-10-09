@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "filesystem": {
+    "default": "allow",
+    "protected_roots": [
+      "/root",
+      "/boot",
+      "/proc",
+      "/sys",
+      "/dev",
+      "/run/user",
+      "~/.ssh",
+      "~/.gnupg",
+      "~/.password-store",
+      "~/.local/share/keyrings",
+      "~/.mozilla/firefox",
+      "~/.config/Proton",
+      "~/.config/Bitwarden",
+      "~/.config/1Password",
+      "~/.config/gh",
+      "~/.config/ctx-agent",
+      "~/.local/share/ctx-agent",
+      "/var/lib/ctx-agent"
+    ],
+    "protected_names": [
+      ".env",
+      ".env.*",
+      "id_rsa",
+      "id_ed25519",
+      "*.pem",
+      "*.key",
+      "credentials.json",
+      "secrets.json",
+      "*.kdbx",
+      "logins.json",
+      "key4.db",
+      "token.json"
+    ],
+    "critical_write_roots": [
+      "/etc",
+      "/opt",
+      "/usr/local",
+      "/var/lib",
+      "~/.config/systemd",
+      "~/.config/autostart",
+      "~/.local/bin"
+    ]
+  }
+}
