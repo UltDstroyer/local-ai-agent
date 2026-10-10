@@ -53,8 +53,8 @@ def _ssh_base(target: RemoteTarget) -> list[str]:
         "-o", "ServerAliveInterval=15",
         "-o", "ServerAliveCountMax=2",
         "-p", str(target.port),
-        f"{target.user}@{target.host}",
         "--",
+        f"{target.user}@{target.host}",
     ]
 
 
