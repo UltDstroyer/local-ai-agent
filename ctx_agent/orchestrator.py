@@ -388,6 +388,7 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
             "cwd": str(workspace),
             "thread_id": row.get("codex_thread", ""),
             "prompt": _lease_prompt(plan, index, context, guidance),
+            "network": plan.budget.allow_network,
             "timeout": 1800,
         },
         timeout=1830,
