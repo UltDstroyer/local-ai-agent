@@ -128,6 +128,43 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(result, 0)
         auth.assert_called_once_with(["status"])
 
+    def test_remote_plan_routes_to_target(self):
+        result, cli, _ = self.invoke(
+            ["plan", "--target", "pi", "Set up media server"],
+            context="",
+        )
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with([
+            "remote-plan-create", "pi", "Set up media server"
+        ])
+
+    def test_remote_approval_routes_to_target(self):
+        result, cli, _ = self.invoke(
+            ["approve", "--target", "pi"], context=""
+        )
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with(["remote-plan-approve", "pi"])
+
+    def test_target_add_routes_to_cli(self):
+        result, cli, _ = self.invoke(
+            ["target", "add", "pi", "--ssh", "pi@raspberrypi"],
+            context="",
+        )
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with([
+            "target-add", "pi", "pi@raspberrypi"
+        ])
+
+    def test_remote_deviation_is_separate_from_local(self):
+        result, cli, _ = self.invoke(
+            ["remote-deviation", "approve", "abc123def456"],
+            context="",
+        )
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with([
+            "remote-deviation-approve", "abc123def456"
+        ])
+
     def test_unknown_command_rejected(self):
         result, cli, _ = self.invoke(["arbitrary-host-shell"])
         self.assertEqual(result, 2)
