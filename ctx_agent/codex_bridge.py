@@ -67,6 +67,7 @@ def _run_codex(
     *,
     writable: bool,
     thread_id: str = "",
+    network: bool = False,
     timeout: int = 1200,
 ) -> dict:
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > MAX_PROMPT:
@@ -93,6 +94,8 @@ def _run_codex(
         "-c", 'approval_policy="never"',
         "-o", str(last_message),
     ]
+    if writable and network:
+        command.extend(["-c", "sandbox_workspace_write.network_access=true"])
     if thread_id:
         command.extend(["resume", thread_id, prompt])
     else:
@@ -155,13 +158,19 @@ class CodexBridge:
         prompt = request.get("prompt", "")
         thread_id = request.get("thread_id", "")
         timeout = request.get("timeout", 1200)
+        network = request.get("network", False)
         if type(timeout) is not int:
             raise BridgeError("timeout must be an integer")
+        if type(network) is not bool:
+            raise BridgeError("network must be boolean")
+        if op != "work" and network:
+            raise BridgeError("network access is only valid for approved work")
         return _run_codex(
             cwd,
             prompt,
             writable=(op == "work"),
             thread_id=thread_id,
+            network=network,
             timeout=timeout,
         )
 
