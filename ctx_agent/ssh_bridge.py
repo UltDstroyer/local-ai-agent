@@ -225,8 +225,6 @@ def _ensure_dir(
 if ! {sudo}test -d {_quote(path)}; then
   {sudo}touch -- {_quote(marker)}
   {sudo}install -d -m {_quote(mode)} -- {_quote(path)}
-else
-  {sudo}chmod {_quote(mode)} -- {_quote(path)}
 fi
 """
     result = _run_script(target, script, timeout=60)
