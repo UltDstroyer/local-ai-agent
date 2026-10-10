@@ -17,8 +17,10 @@ class TestResources(unittest.TestCase):
         balanced = ollama_options("balanced")
         maximum = ollama_options("maximum")
         self.assertGreater(quiet["num_gpu"], 0)
-        self.assertEqual(balanced["num_gpu"], -1)
+        self.assertEqual(balanced["num_gpu"], 24)
+        self.assertEqual(balanced["num_thread"], 4)
         self.assertEqual(maximum["num_gpu"], -1)
+        self.assertNotIn("num_thread", maximum)
         self.assertLess(quiet["num_thread"], balanced["num_thread"])
         self.assertLess(quiet["num_ctx"], balanced["num_ctx"])
         self.assertGreater(balanced["num_batch"], quiet["num_batch"])
@@ -44,7 +46,8 @@ class TestResources(unittest.TestCase):
             body = json.loads(request.data)
             self.assertFalse(body["think"])
             self.assertEqual(body["keep_alive"], "5m")
-            self.assertEqual(body["options"]["num_gpu"], -1)
+            self.assertEqual(body["options"]["num_gpu"], 24)
+            self.assertEqual(body["options"]["num_thread"], 4)
 
     def test_unknown_mode_denied(self):
         with self.assertRaises(ValueError):
