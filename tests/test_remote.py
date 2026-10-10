@@ -1,0 +1,163 @@
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from ctx_agent.remote import (
+    RemoteBudget,
+    RemoteContractError,
+    RemotePlan,
+    RemoteTarget,
+    validate_remote_action,
+)
+from ctx_agent.remote_store import RemoteStore
+from ctx_agent.ssh_bridge import SSHBridge, SSHBridgeError, _ssh_base
+
+
+def budget(**overrides):
+    raw = {
+        "allowed_read_paths": [
+            "/etc/nginx/**",
+            "/etc/cloudflared/**",
+            "/etc/os-release",
+        ],
+        "allowed_write_paths": [
+            "/etc/nginx/**",
+            "/etc/cloudflared/**",
+            "/srv/jellyfin/**",
+        ],
+        "allowed_services": ["nginx", "jellyfin", "cloudflared"],
+        "allowed_packages": ["nginx", "jellyfin", "cloudflared"],
+        "allowed_domains": ["example.com"],
+        "allow_sudo": True,
+        "allow_package_install": True,
+        "allow_network": True,
+        "max_actions": 30,
+        "max_file_writes": 8,
+        "max_attempts_per_milestone": 3,
+        "backup_required": True,
+    }
+    raw.update(overrides)
+    return raw
+
+
+class RemoteContractTests(unittest.TestCase):
+    def test_target_parser(self):
+        target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi", 2222)
+        self.assertEqual(target.user, "pi")
+        self.assertEqual(target.host, "raspberrypi")
+        self.assertEqual(target.port, 2222)
+
+    def test_target_rejects_shell_metacharacters(self):
+        with self.assertRaises(RemoteContractError):
+            RemoteTarget.parse_ssh("pi", "pi@host;rm")
+
+    def test_write_outside_scope_is_denied(self):
+        b = RemoteBudget.from_dict(budget())
+        with self.assertRaises(RemoteContractError):
+            validate_remote_action({
+                "op": "write_file",
+                "path": "/etc/ssh/sshd_config",
+                "content": "nope",
+                "mode": "0644",
+            }, b)
+
+    def test_package_must_be_allowlisted(self):
+        b = RemoteBudget.from_dict(budget())
+        with self.assertRaises(RemoteContractError):
+            validate_remote_action({
+                "op": "package_install",
+                "packages": ["openssh-server"],
+            }, b)
+
+    def test_service_mutation_requires_sudo_capability(self):
+        b = RemoteBudget.from_dict(budget(allow_sudo=False))
+        with self.assertRaises(RemoteContractError):
+            validate_remote_action({
+                "op": "service",
+                "service": "nginx",
+                "action": "restart",
+            }, b)
+
+    def test_no_arbitrary_shell_action_exists(self):
+        b = RemoteBudget.from_dict(budget())
+        with self.assertRaises(RemoteContractError):
+            validate_remote_action({
+                "op": "shell",
+                "command": "rm -rf /",
+            }, b)
+
+    def test_remote_plan_parses_visible_budget(self):
+        raw = {
+            "goal": "Set up media services",
+            "milestones": ["Install", "Configure", "Verify"],
+            "verification": ["All services active"],
+            "risks": ["Remote outage"],
+            "assumptions": ["Debian"],
+            "remote_budget": budget(),
+        }
+        plan = RemotePlan.from_dict(raw, "pi")
+        self.assertEqual(plan.target, "pi")
+        self.assertTrue(plan.budget.backup_required)
+
+
+class RemoteStoreTests(unittest.TestCase):
+    def test_target_and_plan_persist(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = RemoteStore(Path(td) / "remote.sqlite3")
+            target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
+            store.put_target(target.to_dict())
+            self.assertEqual(store.get_target("pi")["host"], "raspberrypi")
+
+            plan = RemotePlan.from_dict({
+                "goal": "Configure nginx",
+                "milestones": ["Configure"],
+                "verification": ["nginx test passes"],
+                "risks": [],
+                "assumptions": [],
+                "remote_budget": budget(),
+            }, "pi")
+            store.create_plan("pi", plan.goal, plan.to_dict())
+            self.assertIsNone(store.next_plan())
+            self.assertTrue(store.approve_plan(plan.id))
+            self.assertEqual(store.next_plan()["status"], "running")
+
+    def test_active_plan_prevents_target_removal(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = RemoteStore(Path(td) / "remote.sqlite3")
+            target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
+            store.put_target(target.to_dict())
+            plan = RemotePlan.from_dict({
+                "goal": "Configure nginx",
+                "milestones": ["Configure"],
+                "verification": ["nginx active"],
+                "risks": [],
+                "assumptions": [],
+                "remote_budget": budget(),
+            }, "pi")
+            store.create_plan("pi", plan.goal, plan.to_dict())
+            self.assertFalse(store.delete_target("pi"))
+
+
+class SSHBridgeTests(unittest.TestCase):
+    def test_ssh_forces_batch_mode_and_strict_host_keys(self):
+        target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
+        with patch("ctx_agent.ssh_bridge._ssh_binary", return_value="/bin/ssh"):
+            args = _ssh_base(target)
+        joined = " ".join(args)
+        self.assertIn("BatchMode=yes", joined)
+        self.assertIn("PasswordAuthentication=no", joined)
+        self.assertIn("StrictHostKeyChecking=yes", joined)
+
+    def test_bridge_rejects_unknown_operation(self):
+        target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
+        with self.assertRaises(SSHBridgeError):
+            SSHBridge().dispatch({
+                "op": "raw_shell",
+                "target": target.to_dict(),
+                "budget": budget(),
+            })
+
+
+if __name__ == "__main__":
+    unittest.main()
