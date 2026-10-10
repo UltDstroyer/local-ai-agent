@@ -47,7 +47,12 @@ def ask(settings: Settings, messages: list[dict], mode: str = 'quiet') -> dict:
     from .resources import ollama_options
     body = json.dumps({"model": settings.model, "stream": False,
                        "messages": messages, "tools": TOOLS,
-                       "keep_alive": "10s",
+                       # Fast interactive modes skip Qwen's explicit thinking
+                       # tokens. Maximum keeps deep reasoning available.
+                       "think": mode == "maximum",
+                       # Avoid repeatedly reloading the model during a work
+                       # session while still allowing VRAM to be reclaimed.
+                       "keep_alive": "5m",
                        "options": ollama_options(mode)}).encode()
     request = urllib.request.Request(
         settings.ollama_url, body,

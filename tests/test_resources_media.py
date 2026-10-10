@@ -1,11 +1,14 @@
+import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from ctx_agent.agent import ask
 from ctx_agent.resources import ollama_options
 from ctx_agent.media import enroll, mux, obs_record, synthesize
+from ctx_agent.runtime import Settings
 
 
 class TestResources(unittest.TestCase):
@@ -14,10 +17,34 @@ class TestResources(unittest.TestCase):
         balanced = ollama_options("balanced")
         maximum = ollama_options("maximum")
         self.assertGreater(quiet["num_gpu"], 0)
-        self.assertLess(quiet["num_gpu"], balanced["num_gpu"])
+        self.assertEqual(balanced["num_gpu"], -1)
+        self.assertEqual(maximum["num_gpu"], -1)
         self.assertLess(quiet["num_thread"], balanced["num_thread"])
         self.assertLess(quiet["num_ctx"], balanced["num_ctx"])
-        self.assertNotIn("num_gpu", maximum)
+        self.assertGreater(balanced["num_batch"], quiet["num_batch"])
+
+    def test_balanced_request_is_fast_and_kept_warm(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def read(self, _limit):
+                return b'{"message":{"content":"ok"}}'
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            settings = Settings(root, root / "socket", root / "projects")
+            with patch("ctx_agent.agent.urllib.request.urlopen",
+                       return_value=Response()) as opened:
+                ask(settings, [{"role": "user", "content": "hi"}], "balanced")
+            request = opened.call_args.args[0]
+            body = json.loads(request.data)
+            self.assertFalse(body["think"])
+            self.assertEqual(body["keep_alive"], "5m")
+            self.assertEqual(body["options"]["num_gpu"], -1)
 
     def test_unknown_mode_denied(self):
         with self.assertRaises(ValueError):

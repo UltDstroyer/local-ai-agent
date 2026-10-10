@@ -42,13 +42,13 @@ Only the local owner CLI can request apply; agent tools do not expose it. Apply 
 
 ## Resource modes
 
-    ctx-agent mode quiet      # DEFAULT: GPU on, 6 layers, 2 CPU threads
-    ctx-agent mode balanced   # GPU on, 18 layers, 4 CPU threads
-    ctx-agent mode maximum    # no voluntary GPU-layer or CPU-thread cap
+    ctx-agent mode quiet      # DEFAULT: conservative GPU offload, no thinking
+    ctx-agent mode balanced   # full GPU offload, no thinking, fast interactive work
+    ctx-agent mode maximum    # full GPU offload with Qwen thinking enabled
     ctx-agent pause
     ctx-agent resume
 
-The Ollama GPU budgets are *hints*, not fixed VRAM or GPU-compute shares. Quiet inference may still temporarily stress the GPU. Details: docs/RESOURCES.md.
+The Ollama GPU budgets are *hints*, not fixed VRAM or GPU-compute shares. Balanced and maximum request full model offload when the backend can fit it. Quiet inference may still temporarily stress the GPU. Models stay warm for five minutes after a request to avoid repeated reload latency. Details: docs/RESOURCES.md.
 
 ## Video and your own voice (separate desktop companion)
 

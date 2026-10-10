@@ -97,7 +97,10 @@ in {
           LockPersonality = true;
           CapabilityBoundingSet = "";
           AmbientCapabilities = "";
-          RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
+          # Bubblewrap needs AF_NETLINK to configure the isolated loopback
+          # interface. The sandbox still has no host/network access because
+          # its worker runs with --unshare-all.
+          RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" "AF_NETLINK" ];
           IPAddressDeny = [ "any" ];
           IPAddressAllow = [ "localhost" ];
           SystemCallArchitectures = "native";
