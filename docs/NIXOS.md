@@ -1,26 +1,145 @@
-# NixOS implementation blueprint (not yet deployable)
+# NixOS deployment
 
-## Service separation
+ctx-agent 0.2 is split into a system coordinator and a user-owned Codex bridge.
 
-1. **Policy controller:** system-managed unit using an owner-controlled policy installed under /etc/ctx-agent (root-owned). It handles approvals and immutable audit records. The AI worker cannot write its binaries, config, database or IPC control sockets.
-2. **Worker:** dedicated non-login Linux account, no sudo, no supplementary docker/podman/input/video groups. Prefer systemd system service or transient scoped workers with strict sandboxing. Do not run as the interactive user.
-3. **Desktop broker:** separately authorized foreground component running within the graphical user session. Use xdg-desktop-portal and Wayland consent where supported. Grant narrowly scoped actions, with revocation. Never pass general session D-Bus/Wayland/X11 access to the background worker.
+## System coordinator
 
-## Target systemd protections (to validate on this NixOS host)
+The NixOS module creates:
 
-- ProtectSystem=strict, ProtectHome=tmpfs plus explicit read-only/read-write bind mounts for permitted files.
-- NoNewPrivileges=true, PrivateTmp=true, PrivateDevices=true, ProtectKernelTunables=true, ProtectControlGroups=true, ProtectKernelModules=true.
-- CapabilityBoundingSet= (empty), RestrictSUIDSGID=true, LockPersonality=true, RestrictNamespaces=true or the narrowest functioning namespace controls.
-- ProcSubset=pid, ProtectProc=invisible, SystemCallArchitectures=native, a tested SystemCallFilter profile, and limits for TasksMax/MemoryMax/CPUQuota/IOWeight.
-- RestrictAddressFamilies to necessary transports; route outbound traffic via an egress policy or disabled network namespace by default.
-- Restrict access to /run sockets and device nodes. All filesystem and mount allowlists must be verified inside the service's actual namespace.
+- the ctx-agent system user
+- the ctx-agent-users operator group
+- /var/lib/ctx-agent/projects
+- /var/lib/ctx-agent/jobs
+- /var/lib/ctx-agent/workspaces
+- /var/lib/ctx-agent/checkpoints
+- /run/ctx-agent/agent.sock
 
-## Resource and quiet modes
+The system service stores project state, approvals, mutation budgets and
+checkpoints. It talks to Ollama only over loopback and to the Codex bridge only
+over a local Unix socket.
 
-Implement a persistent coordinator with short-lived workers, each in a systemd cgroup. Set CPUWeight/IOWeight to low values and explicitly reserve GPU time for interactive processes. Pause heavy work on user-specified contexts (games, video calls, long GPU experiments). Limit maximum parallel workers.
+Example:
 
-## Deployment gates
+    services.ctxAgent = {
+      enable = true;
+      operatorUsers = [ "lena" ];
+      codexOperatorUser = "lena";
+      manageOllama = true;
+      gpuBackend = "rocm";
+      model = "qwen3:8b";
+    };
 
-Do **not** install or enable a systemd service from this branch. Milestone 1 must first introduce a tested kernel-enforced sandbox and a stop mechanism. Installation must be approved from an independent trusted shell or UI. Run systemd-analyze security on deployed units and verify behavior with live negative tests.
+codexOperatorUser is optional. If omitted, the first operatorUsers entry is used.
 
-Relevant docs: https://wiki.nixos.org/wiki/Systemd_Hardening
+## User Codex bridge
+
+The module also installs a user service:
+
+    ctx-codex-bridge.service
+
+For an authorized operator it creates:
+
+    /run/ctx-codex/USERNAME.sock
+
+The bridge runs as the desktop user because the official Codex CLI owns that
+user's ChatGPT authentication state. The system coordinator receives no login
+token.
+
+Users outside ctx-agent-users exit the bridge cleanly without creating a socket.
+
+After the first install or group-membership change, log out of the graphical
+session and back in so the user service inherits ctx-agent-users.
+
+## ChatGPT login
+
+Run from the normal user shell:
+
+    ctx agent codex login
+
+or:
+
+    ctx agent chatgpt login
+
+Then verify:
+
+    ctx agent codex status
+
+Authentication is deliberately not configured in Nix and must not be placed in
+configuration.nix, flake.nix, or the Nix store.
+
+## System service hardening
+
+The system coordinator currently uses:
+
+- User=ctx-agent
+- Group=ctx-agent-users
+- NoNewPrivileges=true
+- ProtectSystem=strict
+- ProtectHome=true
+- PrivateTmp=true
+- PrivateDevices=true
+- ProtectKernelModules=true
+- ProtectControlGroups=true
+- ProtectClock=true
+- ProtectHostname=true
+- RestrictSUIDSGID=true
+- LockPersonality=true
+- empty capability and ambient-capability sets
+- localhost-only IP policy
+- AF_UNIX, AF_INET, AF_INET6 and AF_NETLINK address families
+- low CPUWeight and IOWeight
+- TasksMax and MemoryMax limits
+
+ProtectKernelTunables is intentionally not enabled on the coordinator. On the
+target host it prevented Bubblewrap from mounting the fresh /proc required by
+the inner PID namespace.
+
+AF_NETLINK is intentionally allowed because Bubblewrap needs it to configure
+the isolated loopback interface. Bubblewrap still creates an unshared network
+namespace for the local worker.
+
+These exceptions are there to let the stronger inner sandbox function, not to
+give the LLM host privileges.
+
+## Resource modes
+
+quiet and balanced are intended for interactive desktop use.
+
+maximum is the explicit autonomous-project mode. Only maximum leases new Codex
+project milestones. Changing back to balanced or quiet prevents the orchestrator
+from starting another milestone after the current worker turn returns.
+
+## Runtime directories
+
+Managed source:
+
+    /var/lib/ctx-agent/projects
+
+Autonomous scratch work:
+
+    /var/lib/ctx-agent/workspaces
+
+Approved milestone checkpoints:
+
+    /var/lib/ctx-agent/checkpoints
+
+Persistent SQLite state:
+
+    /var/lib/ctx-agent/state.sqlite3
+
+Neither the project import nor the autonomous workspace carries the original
+checkout's .git directory or filtered secret-like files.
+
+## Validation after rebuild
+
+Check:
+
+    systemctl status ctx-agent --no-pager
+    systemctl --user status ctx-codex-bridge --no-pager
+    ctx agent health
+    ctx agent codex status
+
+Then use a disposable project to verify Bubblewrap and plan creation before
+running the orchestrator on valuable code.
+
+Run systemd-analyze security ctx-agent.service when hardening changes are made.
