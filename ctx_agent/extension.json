@@ -4,14 +4,19 @@
   "name": "Local AI Agent",
   "entrypoint": "ctx-ext-agent",
   "extension_api": 1,
-  "description": "Local Ollama coding agent, queued jobs, controlled media commands",
+  "description": "Local administrative agent with Codex project orchestration, approvals, and controlled media",
   "repository": "UltDstroyer/local-ai-agent",
   "capabilities": [
     "tasks",
     "project-notes",
     "resource-modes",
+    "codex-worker",
+    "chatgpt-sign-in",
+    "project-plans",
+    "mutation-budgets",
+    "deviation-approvals",
     "owner-initiated-media"
   ],
   "lifecycle": "none",
-  "security": "No additional privilege from Context Switcher; see docs/SECURITY.md"
+  "security": "Codex credentials remain in the desktop user bridge; project execution is mutation-budgeted and owner-approved; see docs/SECURITY.md"
 }
