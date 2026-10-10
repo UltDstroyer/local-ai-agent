@@ -30,10 +30,18 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string"}}, "required": ["path"]}}},
     {"type": "function", "function": {
-        "name": "write_file", "description": "Replace/create a UTF-8 source file in the copy.",
+        "name": "write_file", "description": "Create a new UTF-8 source file in the copy.",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string"}, "content": {"type": "string"}},
             "required": ["path", "content"]}}},
+    {"type": "function", "function": {
+        "name": "apply_patch", "description":
+            "Make a narrow edit by replacing one exact existing text span.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"},
+            "expected": {"type": "string"},
+            "replacement": {"type": "string"}},
+            "required": ["path", "expected", "replacement"]}}},
     {"type": "function", "function": {
         "name": "run_tests", "description":
             "Run a preapproved offline Python test suite; choices unittest or compile.",
@@ -43,17 +51,22 @@ TOOLS = [
 ]
 
 
-def ask(settings: Settings, messages: list[dict], mode: str = 'quiet') -> dict:
+def ask(settings: Settings, messages: list[dict], mode: str = 'quiet',
+        tools: list[dict] | None = None) -> dict:
     from .resources import ollama_options
-    body = json.dumps({"model": settings.model, "stream": False,
-                       "messages": messages, "tools": TOOLS,
+    payload = {"model": settings.model, "stream": False,
+                       "messages": messages,
                        # Fast interactive modes skip Qwen's explicit thinking
                        # tokens. Maximum keeps deep reasoning available.
                        "think": mode == "maximum",
                        # Avoid repeatedly reloading the model during a work
                        # session while still allowing VRAM to be reclaimed.
                        "keep_alive": "5m",
-                       "options": ollama_options(mode)}).encode()
+                       "options": ollama_options(mode)}
+    selected_tools = TOOLS if tools is None else tools
+    if selected_tools:
+        payload["tools"] = selected_tools
+    body = json.dumps(payload).encode()
     request = urllib.request.Request(
         settings.ollama_url, body,
         headers={"Content-Type": "application/json"}, method="POST",
@@ -113,7 +126,7 @@ def run_agent(settings: Settings, scratch: Path, prompt: str,
                 if name == "run_tests":
                     suite = args.get("suite", "unittest")
                     result = run_tests(settings, scratch, suite, cancelled)
-                elif name in ("read_file", "write_file", "list_files"):
+                elif name in ("read_file", "write_file", "apply_patch", "list_files"):
                     result = file_tool(settings, scratch, name, args, cancelled)
                 else:
                     result = {"error": "Unknown tool denied"}
