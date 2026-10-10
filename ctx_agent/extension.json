@@ -4,7 +4,7 @@
   "name": "Local AI Agent",
   "entrypoint": "ctx-ext-agent",
   "extension_api": 1,
-  "description": "Local administrative agent with Codex project orchestration, approvals, and controlled media",
+  "description": "Local administrative agent with Codex, approved SSH targets, mutation budgets, and controlled media",
   "repository": "UltDstroyer/local-ai-agent",
   "capabilities": [
     "tasks",
@@ -15,8 +15,12 @@
     "project-plans",
     "mutation-budgets",
     "deviation-approvals",
-    "owner-initiated-media"
+    "owner-initiated-media",
+    "ssh-targets",
+    "remote-project-plans",
+    "remote-mutation-budgets",
+    "remote-rollback"
   ],
   "lifecycle": "none",
-  "security": "Codex credentials remain in the desktop user bridge; project execution is mutation-budgeted and owner-approved; see docs/SECURITY.md"
+  "security": "Codex and SSH credentials remain in user-owned bridges; local and remote execution is mutation-budgeted and owner-approved; see docs/SECURITY.md"
 }
