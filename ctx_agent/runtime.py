@@ -52,6 +52,7 @@ class Settings:
     workspaces_dir: Path | None = None
     checkpoints_dir: Path | None = None
     codex_bridge_socket: Path | None = None
+    ssh_bridge_socket: Path | None = None
 
     @classmethod
     def load(cls, filename: str | os.PathLike) -> "Settings":
@@ -77,10 +78,12 @@ class Settings:
         workspaces = d.get("workspaces_dir")
         checkpoints = d.get("checkpoints_dir")
         bridge = d.get("codex_bridge_socket")
+        ssh_bridge = d.get("ssh_bridge_socket")
         for name, value in (
             ("workspaces_dir", workspaces),
             ("checkpoints_dir", checkpoints),
             ("codex_bridge_socket", bridge),
+            ("ssh_bridge_socket", ssh_bridge),
         ):
             if value is not None and (
                 not isinstance(value, str) or not value.startswith("/")
@@ -94,4 +97,5 @@ class Settings:
                    python=d.get("python", "/run/current-system/sw/bin/python3"),
                    workspaces_dir=Path(workspaces) if workspaces else state_dir / "workspaces",
                    checkpoints_dir=Path(checkpoints) if checkpoints else state_dir / "checkpoints",
-                   codex_bridge_socket=Path(bridge) if bridge else None)
+                   codex_bridge_socket=Path(bridge) if bridge else None,
+                   ssh_bridge_socket=Path(ssh_bridge) if ssh_bridge else None)

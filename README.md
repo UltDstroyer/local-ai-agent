@@ -255,6 +255,103 @@ A separate owner-reviewed export or sync path back to an original checkout is
 still a future milestone. Until then, inspect the managed diff and transfer
 approved changes deliberately.
 
+## SSH targets and remote systems
+
+ctx-agent can also manage machines that are reachable only through SSH, without
+giving the system daemon your SSH private keys or a raw remote shell.
+
+The NixOS module starts a second user-owned bridge:
+
+    ctx-ssh-bridge.service
+
+That bridge runs as the desktop user, so OpenSSH can use the user's existing
+known_hosts, SSH config, keys, and ssh-agent. The system ctx-agent communicates
+with it through a local Unix socket and only sends typed remote operations.
+
+Register a target:
+
+    ctx agent target add pi --ssh pi@raspberrypi
+
+Use a nonstandard SSH port if needed:
+
+    ctx agent target add pi --ssh pi@raspberrypi --port 2222
+
+The target record stores only host, user, port, and a local name. It does not
+store an SSH password or private key.
+
+Before planning, inspect it read-only:
+
+    ctx agent target inspect pi
+
+The broker collects OS, disk, mount, listener, command, and common-service
+information without changing the remote machine.
+
+Create an owner-reviewed remote plan:
+
+    ctx agent plan --target pi       "Set up Jellyfin, nginx, and Cloudflare Tunnel as a reliable media server"
+
+Codex receives the read-only inspection and proposes the technical plan. The
+local Qwen administrator narrows that plan into a remote mutation budget. The
+budget explicitly lists remote paths, services, packages, network permission,
+sudo permission, and action limits.
+
+Review it:
+
+    ctx agent plan --target pi show
+
+Approve it:
+
+    ctx agent approve --target pi
+    ctx agent mode maximum
+
+Only maximum mode leases remote milestones. Codex remains the primary engineer,
+but it cannot call SSH directly. It proposes typed actions and ctx-agent checks
+them against the owner-approved contract before the SSH bridge executes them.
+
+The current typed action vocabulary supports:
+
+- reading approved remote files
+- writing approved config files
+- creating approved directories
+- installing explicitly approved apt packages
+- starting, restarting, and enabling explicitly approved systemd services
+- deterministic checks such as nginx -t, systemctl is-active, journal tails,
+  listening sockets, path/command existence, and HTTP checks
+
+There is intentionally no arbitrary remote shell operation.
+
+Remote config writes are backed up under:
+
+    /var/lib/ctx-agent-remote-backups
+
+If a later deviation is rejected, ctx-agent rolls back file and directory
+changes made during the current milestone before asking Codex for an
+in-contract alternative.
+
+If Codex needs authority it does not have, the project pauses:
+
+    ctx agent deviations --target pi
+    ctx agent remote-deviation show DEVIATION_ID
+    ctx agent remote-deviation approve DEVIATION_ID
+
+or reject it:
+
+    ctx agent remote-deviation reject DEVIATION_ID
+
+Examples of changes that become owner-visible deviations include an unexpected
+/etc path, a new package, a new systemd service, extra public network access, or
+exceeding the approved action/file-write budget.
+
+The SSH bridge uses BatchMode, disables password and keyboard-interactive
+prompts, and requires an already trusted host key. Connect to a machine manually
+with ssh once before registering it if its host key is not already present.
+
+The remote worker deliberately does not expose disk partitioning, firewall
+reset, sshd configuration changes, credential mutation, arbitrary command
+execution, or secret injection. Some setups, especially first-time Cloudflare
+Tunnel authentication or adding third-party package repositories, can therefore
+pause and ask for a human step instead of silently broadening authority.
+
 ## Documentation
 
 - docs/ORCHESTRATION.md - plan, approval, and worker lifecycle

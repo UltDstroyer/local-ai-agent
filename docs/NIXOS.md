@@ -143,3 +143,28 @@ Then use a disposable project to verify Bubblewrap and plan creation before
 running the orchestrator on valuable code.
 
 Run systemd-analyze security ctx-agent.service when hardening changes are made.
+
+
+## SSH bridge user service
+
+The module also installs:
+
+    ctx-ssh-bridge.service
+
+Authorized operator sessions create:
+
+    /run/ctx-ssh/USERNAME.sock
+
+The service runs as the desktop user so OpenSSH can use that user's normal
+known_hosts, SSH config, keys, and ssh-agent. The system ctx-agent service sees
+only the local broker socket.
+
+The package includes the OpenSSH client. Remote hosts must already have a trusted
+host key because autonomous connections use StrictHostKeyChecking=yes.
+
+Check it after rebuild with:
+
+    systemctl --user status ctx-ssh-bridge --no-pager
+    ctx agent target list
+
+See docs/REMOTE.md for the remote contract and supported typed actions.

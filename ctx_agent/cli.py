@@ -89,9 +89,48 @@ def main(argv=None):
         item = sub.add_parser(cmd)
         item.add_argument("id")
 
+    item = sub.add_parser("target-add")
+    item.add_argument("name")
+    item.add_argument("ssh")
+    item.add_argument("--port", type=int, default=22)
+
+    sub.add_parser("target-list")
+    for cmd in ("target-show", "target-remove", "target-inspect"):
+        item = sub.add_parser(cmd)
+        item.add_argument("name")
+
+    item = sub.add_parser("remote-plan-create")
+    item.add_argument("target")
+    item.add_argument("goal")
+
+    item = sub.add_parser("remote-plan-list")
+    item.add_argument("target", nargs="?")
+
+    for cmd in (
+        "remote-plan-show", "remote-plan-approve", "remote-plan-reject",
+        "remote-plan-cancel", "remote-plan-events",
+    ):
+        item = sub.add_parser(cmd)
+        item.add_argument("target")
+        item.add_argument("id", nargs="?")
+
+    item = sub.add_parser("remote-deviation-list")
+    item.add_argument("target", nargs="?")
+
+    for cmd in (
+        "remote-deviation-show",
+        "remote-deviation-approve",
+        "remote-deviation-reject",
+    ):
+        item = sub.add_parser(cmd)
+        item.add_argument("id")
+
     args = parser.parse_args(argv)
     data = {"op": args.action.replace("-", "_")}
-    for field in ("project", "prompt", "goal", "id", "key", "text", "mode"):
+    for field in (
+        "project", "prompt", "goal", "id", "key", "text", "mode",
+        "name", "ssh", "port", "target",
+    ):
         if hasattr(args, field):
             value = getattr(args, field)
             if value is not None:
@@ -108,7 +147,9 @@ def main(argv=None):
                 "copied": import_files(source, Path(dest["path"])),
             }
         else:
-            timeout = 1200 if args.action == "plan-create" else 900
+            timeout = 1200 if args.action in (
+                "plan-create", "remote-plan-create", "target-inspect"
+            ) else 900
             result = call(args.socket, data, timeout=timeout)
 
         if args.action in ("diff", "plan-diff"):

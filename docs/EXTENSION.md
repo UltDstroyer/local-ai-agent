@@ -92,3 +92,22 @@ Codex to consult or work without owning the user's token.
 The extension gains no privilege merely because Context Switcher invoked it.
 See docs/SECURITY.md for the system/user service boundary, known Codex process
 visibility limitation, managed workspaces, and mutation-contract enforcement.
+
+
+## SSH targets
+
+The agent extension also owns remote-target commands:
+
+    ctx agent target add pi --ssh pi@raspberrypi
+    ctx agent target inspect pi
+    ctx agent plan --target pi "Set up the media server"
+    ctx agent approve --target pi
+    ctx agent deviations --target pi
+    ctx agent remote-deviation approve ID
+
+Context Switcher does not receive SSH credentials or implement SSH itself.
+local-ai-agent owns the user bridge, remote plan database, mutation contract,
+typed actions, rollback metadata, and owner approval flow.
+
+Remote execution still requires maximum mode and an explicit approved plan.
+See docs/REMOTE.md.

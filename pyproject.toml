@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ctx-agent"
-version = "0.2.0"
+version = "0.3.0"
 description = "Sandboxed local task agent for NixOS"
 requires-python = ">=3.11"
 dependencies = []
@@ -15,6 +15,7 @@ ctx-agent-server = "ctx_agent.server:main"
 ctx-agent-media = "ctx_agent.media:main"
 ctx-agent-codex-auth = "ctx_agent.codex_auth:main"
 ctx-agent-codex-bridge = "ctx_agent.codex_bridge:main"
+ctx-agent-ssh-bridge = "ctx_agent.ssh_bridge:main"
 ctx-ext-agent = "ctx_agent.context_extension:main"
 
 [tool.setuptools.packages.find]

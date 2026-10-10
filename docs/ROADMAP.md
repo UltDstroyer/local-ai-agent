@@ -62,3 +62,23 @@
 
 Release state: technical preview. Autonomous project work is deliberately
 limited to sanitized managed copies and explicit owner-approved mutation leases.
+
+
+## 2.5. SSH remote systems
+
+- [x] User-owned SSH bridge keeps private keys out of the system daemon
+- [x] Named SSH targets with host/user/port only
+- [x] Strict host-key and non-interactive SSH policy
+- [x] Fixed read-only remote inspection
+- [x] Codex-led remote planning with local administrator reconciliation
+- [x] Explicit owner approval before remote mutation
+- [x] Typed remote action vocabulary with no arbitrary shell RPC
+- [x] Remote path/service/package/domain/sudo/network budgets
+- [x] Maximum-mode-only autonomous remote execution
+- [x] Config-file backup metadata and current-milestone rollback
+- [x] Remote deviations and owner approval/rejection
+- [x] Final read-only verification before completion
+- [ ] Typed third-party repository installation with domain/key pinning
+- [ ] Owner-mediated secret handoff for credential-bearing setup flows
+- [ ] Stronger service/package rollback snapshots where reversibility is safe
+- [ ] Host integration test against a disposable Raspberry Pi or VM
