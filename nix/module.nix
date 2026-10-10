@@ -15,6 +15,8 @@ let
     checkpoints_dir = "/var/lib/ctx-agent/checkpoints";
     codex_bridge_socket =
       if codexUser == "" then null else "/run/ctx-codex/${codexUser}.sock";
+    ssh_bridge_socket =
+      if codexUser == "" then null else "/run/ctx-ssh/${codexUser}.sock";
     ollama_url = "http://127.0.0.1:11434/api/chat";
     model = cfg.model;
     max_steps = cfg.maxSteps;
@@ -81,6 +83,7 @@ in {
         "d /var/lib/ctx-agent/workspaces 2770 ctx-agent ctx-agent-users - -"
         "d /var/lib/ctx-agent/checkpoints 0700 ctx-agent ctx-agent-users - -"
         "d /run/ctx-codex 0770 root ctx-agent-users - -"
+        "d /run/ctx-ssh 0770 root ctx-agent-users - -"
       ];
 
       # The Codex bridge runs as the desktop user so ChatGPT/Codex credentials
@@ -91,6 +94,19 @@ in {
         serviceConfig = {
           Type = "simple";
           ExecStart = "${package}/bin/ctx-agent-codex-bridge --socket /run/ctx-codex/%u.sock --group ctx-agent-users";
+          Restart = "on-failure";
+          RestartSec = 3;
+        };
+      };
+
+      # SSH credentials and ssh-agent access remain in the desktop user session.
+      # The system coordinator sees only this typed local Unix-socket broker.
+      systemd.user.services.ctx-ssh-bridge = {
+        description = "User-owned typed SSH bridge for ctx-agent";
+        wantedBy = [ "default.target" ];
+        serviceConfig = {
+          Type = "simple";
+          ExecStart = "${package}/bin/ctx-agent-ssh-bridge --socket /run/ctx-ssh/%u.sock --group ctx-agent-users";
           Restart = "on-failure";
           RestartSec = 3;
         };
