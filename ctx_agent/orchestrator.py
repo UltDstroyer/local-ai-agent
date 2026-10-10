@@ -119,6 +119,41 @@ credential access, host-wide changes, unrelated cleanup, or speculative
 refactors."""
 
 
+def _codex_agreement_prompt(plan: Plan) -> str:
+    return f"""The local administrator reconciled our proposed project plan.
+Do not edit files. Review the contract below as the primary engineer.
+
+{json.dumps(plan.to_dict(), indent=2)}
+
+Return JSON only:
+{{
+  "agreement": true,
+  "concerns": ["..."]
+}}
+
+Set agreement=true only if the plan is technically viable, sufficiently scoped
+to accomplish the owner goal, and still reasonably minimal. Do not ask for
+broader authority merely for convenience."""
+
+
+def _admin_final_reconcile_prompt(plan: Plan, concerns: list[str]) -> str:
+    return f"""You are the local project administrator. Codex reviewed your reconciled
+plan and raised the concerns below. Make the smallest revision needed to reach
+technical agreement without granting speculative authority. Return the complete
+plan JSON only.
+
+Current plan:
+{json.dumps(plan.to_dict())[:14000]}
+
+Codex concerns:
+{json.dumps(concerns)[:6000]}
+
+Do not silently expand credential access, host-wide changes, unrelated cleanup,
+or destructive authority. If a concern truly requires a scope or budget change,
+make that exact change visible in the returned contract so the owner can approve
+it."""
+
+
 def create_negotiated_plan(settings, store, source: Path, project: str, goal: str, mode: str) -> dict:
     if settings.codex_bridge_socket is None:
         raise OrchestrationError("Codex bridge is not configured")
@@ -172,13 +207,74 @@ def create_negotiated_plan(settings, store, source: Path, project: str, goal: st
     )
     admin = _json_object(str(admin_message.get("content", "")))
     plan = Plan.from_dict(admin, project)
+
+    agreement = None
+    for round_number in range(2):
+        agreement_reply = bridge_call(
+            settings.codex_bridge_socket,
+            {
+                "op": "consult",
+                "cwd": str(source),
+                "thread_id": codex.get("thread_id", ""),
+                "prompt": _codex_agreement_prompt(plan),
+                "timeout": 600,
+            },
+            timeout=630,
+        )
+        if not agreement_reply.get("ok"):
+            raise OrchestrationError(
+                "Codex could not review the reconciled plan: "
+                + agreement_reply.get("events_tail", "")[-2000:]
+            )
+        agreement = _json_object(agreement_reply.get("message", ""))
+        if agreement.get("agreement") is True:
+            break
+        concerns = agreement.get("concerns")
+        if not isinstance(concerns, list) or not concerns:
+            raise OrchestrationError(
+                "Codex did not agree to the plan and supplied no actionable concerns"
+            )
+        if round_number == 1:
+            raise OrchestrationError(
+                "Codex and the local administrator could not agree on a minimal plan: "
+                + "; ".join(str(x) for x in concerns)[:3000]
+            )
+        final_admin_message = ask(
+            settings,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Return strict JSON only. You are the administrative "
+                        "authority negotiating the smallest viable project contract."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": _admin_final_reconcile_prompt(
+                        plan, [str(x) for x in concerns]
+                    ),
+                },
+            ],
+            "balanced" if mode == "quiet" else mode,
+            tools=[],
+        )
+        final_admin = _json_object(
+            str(final_admin_message.get("content", ""))
+        )
+        plan = Plan.from_dict(final_admin, project, plan.id)
+
     stored = plan.to_dict()
     stored["planning"] = {
         "codex_thread": codex.get("thread_id", ""),
         "codex_proposal": candidate,
         "admin_reconciled": True,
+        "codex_agreed": True,
+        "codex_agreement": agreement,
     }
     store.create_plan(project, goal, stored)
+    if codex.get("thread_id"):
+        store.update_plan(plan.id, codex_thread=codex["thread_id"])
     return store.get_plan(plan.id)
 
 
