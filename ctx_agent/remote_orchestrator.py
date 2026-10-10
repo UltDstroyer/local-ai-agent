@@ -594,11 +594,26 @@ def run_remote_plan_step(settings, remote_store, row: dict, mode: str):
         try:
             checked = validate_remote_action(action, plan.budget)
         except RemoteContractError as exc:
+            reason = str(exc)
+            if reason.startswith("unsupported remote action"):
+                request = {
+                    "type": "manual_required",
+                    "reason": reason,
+                    "proposed_action": action if isinstance(action, dict) else {},
+                    "suggested_action": (
+                        "This operation is intentionally unavailable through the "
+                        "SSH broker. Perform the required step manually if you "
+                        "want it, then approve this deviation to re-inspect and "
+                        "continue, or reject it to make Codex find an alternative."
+                    ),
+                }
+            else:
+                request = action_deviation(plan, action, reason)
             remote_store.create_deviation(
                 plan.id,
                 plan.target,
-                str(exc),
-                action_deviation(plan, action, str(exc)),
+                reason,
+                request,
             )
             return
         if checked["op"] == "write_file":
@@ -799,6 +814,10 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
         action = request.get("proposed_action", {})
         plan = _amend_budget_for_action(plan, action)
         remote_store.update_plan(plan.id, plan=plan.to_dict())
+    elif request.get("type") == "manual_required":
+        # Approval means the owner handled/accepted the manual dependency.
+        # The unsupported operation is still NOT added to the broker.
+        pass
     elif request.get("type") == "remote_budget":
         raw = plan.to_dict()
         budget = raw["remote_budget"]
@@ -818,12 +837,18 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
     if not remote_store.resolve_deviation(did, True):
         raise RemoteOrchestrationError("remote deviation changed concurrently")
     context = dict(row.get("context", {}))
-    context["next_guidance"] = str(
-        request.get(
-            "suggested_action",
-            "Owner approved the exact requested remote deviation. Continue narrowly.",
+    if request.get("type") == "manual_required":
+        context["next_guidance"] = (
+            "Owner handled or accepted the manual dependency. Re-inspect the "
+            "target and continue without retrying the unsupported broker action."
         )
-    )[:3000]
+    else:
+        context["next_guidance"] = str(
+            request.get(
+                "suggested_action",
+                "Owner approved the exact requested remote deviation. Continue narrowly.",
+            )
+        )[:3000]
     remote_store.update_plan(
         plan.id, status="approved", attempts=0, context=context
     )
