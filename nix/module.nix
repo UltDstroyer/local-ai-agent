@@ -88,7 +88,10 @@ in {
           ReadWritePaths = [ "/var/lib/ctx-agent" "/run/ctx-agent" ];
           PrivateTmp = true;
           PrivateDevices = true;
-          ProtectKernelTunables = true;
+          # Do not enable ProtectKernelTunables here. Its outer mount-namespace
+          # restrictions can prevent Bubblewrap from mounting the fresh /proc
+          # required by the inner PID namespace. Bubblewrap still isolates the
+          # worker with --unshare-all, and the coordinator remains unprivileged.
           ProtectKernelModules = true;
           ProtectControlGroups = true;
           ProtectClock = true;
