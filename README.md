@@ -1,110 +1,266 @@
 # ctx-agent
 
-Local-first AI coding assistant for NixOS. Work is queued persistently and processed through a local Ollama model. Untrusted file tools and test runs use offline Bubblewrap namespaces against disposable source-code snapshots. No Codex usage is needed.
+Local-first administrative coding agent for NixOS. ctx-agent keeps durable project
+context, negotiates mutation budgets, supervises a Codex worker, and requires
+explicit owner approval before autonomous project execution or material scope
+expansion.
 
-**Status: technical preview, not yet host-verified.** Python tests run in GitHub CI. NixOS installation, Bubblewrap user namespaces, Ollama ROCm offloading and OBS interaction still require a test on your own hardware. Do not treat the security sandbox as audited.
+The local Ollama model is the administrator. Codex is the primary engineer for
+large project mode. Small bounded jobs can still run entirely through Ollama.
+
+**Status: technical preview.** The security model is intentionally conservative,
+but it is not a completed security audit. Use managed project copies and inspect
+final diffs before applying them.
+
+## Architecture
+
+    owner
+      |
+      v
+    ctx / ctx-agent
+      |
+      +-- local Qwen administrator
+      |     - project memory
+      |     - plan reconciliation
+      |     - mutation-budget enforcement
+      |     - Codex steering
+      |
+      +-- user-owned Codex bridge
+      |     - ChatGPT/Codex authentication
+      |     - read-only planning consultation
+      |     - workspace-scoped engineering turns
+      |
+      +-- durable SQLite state
+            - plans
+            - milestones
+            - checkpoints
+            - deviations
+            - owner approvals
+
+Codex credentials are not copied into the system ctx-agent daemon. The bridge
+runs in the desktop user's session and exposes a narrow Unix socket. The system
+agent sees task results and thread IDs, not ChatGPT tokens.
 
 ## Install as a NixOS flake module
 
-In the inputs of your current system flake add:
+In the inputs of your system flake:
 
-    ctx-agent.url = "github:UltDstroyer/local-ai-agent/milestone-0-security";
+    local-ai-agent = {
+      url = "github:UltDstroyer/local-ai-agent/milestone-0-security";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
-and include the module in your system modules list:
+Include:
 
-    ctx-agent.nixosModules.default
+    local-ai-agent.nixosModules.default
 
-Then in your NixOS module configuration:
+Then configure:
 
     services.ctxAgent = {
       enable = true;
-      operatorUsers = [ "lena" ]; # replace if your login differs
-      manageOllama = true; # false if you already manage Ollama
+      operatorUsers = [ "lena" ];
+      manageOllama = true;
+      gpuBackend = "rocm";
       model = "qwen3:8b";
+      codexOperatorUser = "lena";
     };
 
-Review your configuration and rebuild with your existing nixos-rebuild workflow. Manually download the model using ollama pull qwen3:8b. Log out and back in so your group membership is refreshed.
+The codexOperatorUser option is optional and defaults to the first operatorUsers
+entry. Rebuild, pull the configured Ollama model, and log out/in once so group
+membership and the user Codex bridge are refreshed.
 
-Untrusted work happens only inside an allowlisted source-code snapshot. The daemon cannot inspect your usual /home, browser or credentials, and the model cannot apply edits to an original project on its own.
+The package includes the Nixpkgs Codex CLI.
 
-## Use
+## Sign in with ChatGPT for Codex
 
-    ctx-agent health
-    ctx-agent import demo ~/src/your-project
-    # import creates a new named project from sanitized source files
-    ctx-agent submit demo "Inspect this project and fix failing Python tests"
-    ctx-agent list
-    ctx-agent events JOB_ID
-    ctx-agent diff JOB_ID
-    ctx-agent apply JOB_ID # human review required
+Authentication is owner-initiated and stays in the desktop user's normal Codex
+credential store:
 
-Only the local owner CLI can request apply; agent tools do not expose it. Apply does not delete files, though it can replace ordinary project files. Inspect the diff before approving.
+    ctx agent codex login
+
+or the equivalent alias:
+
+    ctx agent chatgpt login
+
+Choose Sign in with ChatGPT in the Codex flow. Check it with:
+
+    ctx agent codex status
+
+Other owner-only helpers:
+
+    ctx agent codex logout
+    ctx agent codex doctor
+
+The local system daemon never receives the login credential.
+
+## Small bounded jobs
+
+The original local-only job workflow remains available:
+
+    ctx agent import --project demo ~/src/demo
+    ctx agent submit --project demo "Fix the failing parser test"
+    ctx agent status JOB_ID
+    ctx agent diff JOB_ID
+    ctx agent apply JOB_ID
+
+These jobs run in disposable Bubblewrap snapshots. Existing-file edits use a
+narrow exact-span patch tool; whole-file write operations only create new files.
+
+## Autonomous project workflow
+
+Large projects use a plan-first contract.
+
+Start planning:
+
+    ctx switch demo
+    ctx agent plan "Implement the requested feature"
+
+During planning:
+
+1. Codex inspects the sanitized managed project read-only and proposes a plan.
+2. The local administrator reviews and narrows the plan.
+3. A machine-readable mutation budget is stored.
+4. Nothing is modified yet.
+5. The plan is shown to the owner and waits for approval.
+
+Inspect it:
+
+    ctx agent plan show
+
+Approve it:
+
+    ctx agent approve
+
+Autonomous execution intentionally runs only in maximum mode:
+
+    ctx agent mode maximum
+
+The administrator then works milestone by milestone with Codex. Codex does the
+main implementation work; ctx-agent keeps durable context, measures the actual
+filesystem diff, steers Codex when it stalls, checkpoints completed milestones,
+and stops on material deviations.
+
+Useful commands:
+
+    ctx agent plan show
+    ctx agent plan diff
+    ctx agent deviations
+    ctx agent deviation show DEVIATION_ID
+    ctx agent deviation approve DEVIATION_ID
+    ctx agent deviation reject DEVIATION_ID
+    ctx agent plan cancel
+
+When all milestones finish inside the approved contract, the plan enters
+ready_for_review. Nothing is copied into the managed project until the owner
+reviews the final diff and runs:
+
+    ctx agent plan apply
+
+## Mutation budgets
+
+A plan contains:
+
+- project goal and milestones
+- read scope and write scope
+- maximum changed files
+- maximum changed lines
+- whether new files are allowed
+- whether deletions are allowed
+- whether dependency changes are allowed
+- whether Nix, CI, and configuration changes are allowed
+- whether worker command network access is allowed
+- maximum retry count per milestone
+- acceptance and verification criteria
+
+Codex may propose changes, but it cannot expand its own authority.
+
+After every worker turn ctx-agent computes the real diff. Out-of-scope files,
+budget overruns, unapproved config or dependency changes, deletions, or other
+material scope changes create a deviation request and pause the project.
+
+Owner approval amends the lease. Rejection restores the most recent completed
+checkpoint and tells the administrator to find an alternative inside the
+original scope.
+
+## Project context and checkpoints
+
+The database, not a model context window, owns long-running project state.
+ctx-agent persists the approved plan, current milestone, mutation budget,
+Codex thread ID, administrator guidance, prior Codex summaries, retry count,
+deviations and owner decisions, and final review state.
+
+Completed milestones receive private filesystem checkpoints. If a proposed
+deviation is rejected, the current workspace rolls back to the most recent
+checkpoint rather than preserving unauthorized edits.
 
 ## Resource modes
 
-    ctx-agent mode quiet      # DEFAULT: minimal CPU/GPU interference, no thinking
-    ctx-agent mode balanced   # 4 CPU threads + partial GPU offload, no thinking
-    ctx-agent mode maximum    # uncapped CPU threads + full GPU offload + thinking
-    ctx-agent pause
-    ctx-agent resume
+    ctx agent mode quiet
+    ctx agent mode balanced
+    ctx agent mode maximum
 
-The Ollama GPU budgets are *hints*, not fixed VRAM or GPU-compute shares. Balanced caps model CPU evaluation at 4 threads and uses partial GPU offload to preserve desktop responsiveness; maximum removes the CPU-thread cap and requests full GPU offload. Quiet inference may still temporarily stress the GPU. Models stay warm for five minutes after a request to avoid repeated reload latency. Details: docs/RESOURCES.md.
+quiet minimizes interference. balanced uses four CPU evaluation threads and
+partial GPU offload for the local administrator. maximum removes the local CPU
+thread cap, requests full GPU offload, enables Qwen thinking, and permits
+approved autonomous project plans to advance.
 
-## Video and your own voice (separate desktop companion)
+Codex usage is separate from the local GPU profile. See docs/RESOURCES.md.
 
-The Nix package also installs ctx-agent-media. It can use your manually configured OBS WebSocket scene for an explicitly started recording, enroll a voice reference, produce F5-TTS narration, and mix WAV narration onto MP4 video with ffmpeg. These features cannot be called autonomously by the AI worker, and F5-TTS itself must be installed separately for the Radeon ROCm environment. See docs/MEDIA.md.
+## Safety boundaries
 
-## Access and privacy
+The design deliberately separates authority:
 
-- Trusted users in the ctx-agent-users group can submit tasks and request review/apply.
-- No remote listener or ChatGPT connection is enabled.
-- Model data goes to the Ollama service at loopback only.
-- No arbitrary host shell command tool, sudo escalation, or unattended GUI access.
-- Sensitive names, symlinks and hidden tool/cache folders are filtered when making snapshots.
-- The original policy evaluator is retained for classification and tests; it is NOT a replacement for OS isolation.
+- ctx-agent is the policy and administration layer.
+- Codex is the main engineering worker.
+- Codex works only on sanitized managed copies and workspaces.
+- An unauthorized edit in a disposable workspace is not an approved edit.
+- Actual diffs, not model claims, decide whether the mutation contract passed.
+- Scope expansion requires owner approval.
+- Final application requires an explicit owner command.
+- Credentials, .git, secret-like files, symlinks, and common private folders
+  are filtered from imported project snapshots.
+- ChatGPT and Codex credentials remain with the user-owned bridge.
+- No HTTP listener is exposed by ctx-agent or the bridge.
 
-Design: docs/SECURITY.md, docs/NIXOS.md, docs/ROADMAP.md. This version is a practical foundation rather than unrestricted machine control.
+The current Codex bridge invokes Codex with user configuration and rules
+disabled and with an explicit sandbox mode. Read docs/SECURITY.md before using
+this with untrusted repositories.
 
-## Context Switcher extension
+## Context Switcher integration
 
-**Context Switcher is the main platform.** This repository implements
-an opt-in Extension API v1 adapter: the installed executable
-ctx-ext-agent. The core does not contain any AI-specific arguments,
-model logic, background service or video implementation.
+Context Switcher remains the platform shell. This repository provides the
+ctx-ext-agent Extension API v1 adapter.
 
-When both packages are installed, Context Switcher discovers the command
-via PATH, with no plugin registration or changes to the core repository:
+Examples:
 
     ctx extensions
     ctx switch research
     ctx agent import ~/src/research-project
-    ctx agent submit "Investigate failing tests"
+    ctx agent codex login
+    ctx agent plan "Finish the project"
+    ctx agent approve
+    ctx agent mode maximum
     ctx agent status
-    ctx agent mode quiet
-    ctx agent list
-    ctx agent diff JOB_ID
-    ctx agent apply JOB_ID
 
-Use ctx agent submit --project NAME "Task" if no context is active or to
-target a different managed project. Video commands such as
-ctx agent media record start remain explicitly initiated by the owner.
+Use --project NAME when no ctx context is active.
 
-The ctx-extension manifest is in ctx_agent/extension.json, and the adapter
-and its tests live in ctx_agent/context_extension.py and
-tests/test_context_extension.py. The extension runs standalone as
-ctx-ext-agent even when the ctx CLI is absent.
+## Imported-project boundary
 
-The stable plugin interface is documented in the Context Switcher
-repository at docs/EXTENSIONS.md. To install, add the independent
-local-ai-agent NixOS module as described in this README. Installing
-Context Switcher alone never installs or enables the AI extension.
+Import copies allowlisted source files into /var/lib/ctx-agent/projects.
+Autonomous work happens in /var/lib/ctx-agent/workspaces. Applying a job or
+project updates the managed project copy, not the original Git checkout from
+which it was imported.
 
-### Imported project boundaries
+A separate owner-reviewed export or sync path back to an original checkout is
+still a future milestone. Until then, inspect the managed diff and transfer
+approved changes deliberately.
 
-A source import copies filtered source files into the service's managed project
-directory. Both ctx-agent apply and ctx agent apply update that **managed copy**;
-neither writes automatically into the original Git checkout you imported from.
-An export/sync command with original-file conflict checks and explicit user
-approval is not implemented in this preview. Until it exists, inspect the
-diff and manually transfer the approved changes to your original repo.
+## Documentation
 
+- docs/ORCHESTRATION.md - plan, approval, and worker lifecycle
+- docs/CODEX.md - ChatGPT sign-in and bridge behavior
+- docs/SECURITY.md - trust boundaries and known limitations
+- docs/NIXOS.md - NixOS service details
+- docs/RESOURCES.md - local resource profiles
+- docs/ROADMAP.md - remaining milestones
+- docs/MEDIA.md - owner-initiated media companion

@@ -43,3 +43,19 @@ command. CPU priority is lowered unless invoked with --maximum.
 Pause prevents new jobs but does not instantly stop an active generation.
 To ensure quiet while gaming, stop the agent daemon and consider unloading
 models from Ollama separately.
+
+
+## Autonomous project scheduling
+
+The local resource profile controls only the Ollama administrator. Codex runs
+through the separate user-owned bridge and follows its own account/runtime
+limits.
+
+Plan creation and owner approval are available in every mode. New autonomous
+Codex milestones are leased only while ctx-agent is in maximum mode. Switching
+to balanced or quiet prevents the orchestrator from starting another milestone
+after the current turn returns.
+
+This makes maximum mean both full local-model resources and autonomous project
+execution, while balanced remains the normal profile for using the desktop at
+the same time.

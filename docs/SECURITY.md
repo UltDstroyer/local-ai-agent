@@ -1,48 +1,204 @@
-# Milestone 0: Threat model and security contract
+# Security model
 
-**Status:** Design and policy prototype only. Do not grant this Python process broad real-machine permissions. There is no secure command runner yet.
-
-## Selected operating posture
-
-- Expanded ordinary filesystem access: permitted by policy for reading and writing non-protected files, but actual Linux access remains limited by the operating-system identity and eventual sandbox mounts.
-- Critical approval: delete/move/chmod, OS configuration, service deployment, global installs, and upload operations require an approval delivered by a separate trusted local controller. The model must not be able to mint, forge or replay grants.
-- Authorized desktop interaction: graphical capture, input, and launch requests require per-task user authorization from a separate desktop broker. No continuous screen scraping or silent capture.
-- The agent may be quiet in the background, but quiet mode never grants extra rights.
+ctx-agent separates owner authority, local administration, Codex execution, and
+project data. This is still a technical preview, not a completed security audit.
 
 ## Trust boundaries
 
-1. **Untrusted:** LLM text, tool responses, repository content, terminal output, websites, downloaded files and stored task memory.
-2. **Trusted control plane:** owner-managed policy, approval records, audit sink, executor launcher, and desktop broker. Keep these inaccessible to the agent's UID and never in an agent-writable Git checkout.
-3. **Worker boundary:** separate unprivileged UID, explicit filesystem mounts/permissions, bounded processes, resource limits, no inherited login session cookies or SSH/GitHub credentials.
-4. **Human approval:** a trusted UI shows the exact action, resource, scope and expiry; no implicit approval from natural-language instructions or an AI-generated boolean.
+1. Owner
+   - approves the initial mutation contract
+   - approves important deviations
+   - explicitly applies final results
 
-## Built-in permanent denials
+2. System ctx-agent
+   - runs as the unprivileged ctx-agent user
+   - owns durable project state, approvals, checkpoints, and policy decisions
+   - has no ChatGPT or Codex login credential
+   - exposes only a group-restricted Unix socket
 
-Changing policy or audit settings, obtaining new privileges, raw process-memory reads, direct credential access, disk formatting/partitioning, and background desktop capture. These must also be enforced through Linux isolation, not just operation names.
+3. Local Ollama administrator
+   - receives project summaries, plans, diffs, and Codex reports
+   - may recommend guidance
+   - cannot directly expand an approved mutation contract
+   - does not receive owner credentials
 
-## Sensitive locations
+4. User-owned Codex bridge
+   - runs in the desktop user's session
+   - owns the normal Codex/ChatGPT authentication context
+   - accepts only health, consultation, and managed-workspace work requests
+   - exposes a Unix socket under /run/ctx-codex
+   - does not expose arbitrary shell RPC
 
-Example policy protects SSH/GPG keys, browser profiles, password managers, agent policy/state, API virtual filesystems and likely credential filenames. Expand it for personal vaults, mounted drives, backups, BitLocker recovery keys and any device-specific secrets **before** installation.
+5. Codex worker
+   - is the primary engineer for autonomous project mode
+   - receives a sanitized managed project/workspace
+   - is instructed to stay inside the approved mutation lease
+   - runs with an explicit Codex sandbox mode
+   - cannot cause a workspace edit to become approved merely by creating it
 
-System paths such as /etc and /opt are readable where Linux permissions permit, but writes require a separate approval flow. /boot, /root and kernel/process interfaces are not available to the agent.
+6. Repository and model content
+   - always untrusted
+   - cannot redefine policy, owner approval, mutation budgets, or credential
+     boundaries
 
-## Known limits of this prototype
+## Managed project boundary
 
-- The Python evaluator is only a classifier. A malicious or mistaken executable can ignore it; an LLM can mislabel a request. The future launcher must own the permission decision and map high-level operations to fixed, typed executors.
-- Symlink checks here are **not race-safe**. Kernel-enforced mount namespaces, dedicated UIDs, safe openat2-style resolution, and file-descriptor-based operations will be necessary. Do not perform open/write/delete based on a prior check.
-- Command blacklists cannot stop equivalent operations through Python, shell expansion, scripts, IPC, network services, or other applications. Arbitrary command execution stays disabled through Milestone 0.
-- Filesystem namespace restrictions do not automatically isolate Unix sockets or prevent later host mounts from propagating. Avoid passing D-Bus, SSH agent, Docker, Podman, Wayland, X11, cloud, or browser-control sockets to background workers.
-- Expanded write access and non-root isolation are in tension: a separate UID cannot automatically write to everything owned by the normal user. Use approved directories/bind mounts or a narrow mediated broker; do not solve this by giving broad sudo access.
-- The prototype includes no cryptographic approvals, no trusted UI, no real sandbox, no automatic memory redaction, no filesystem watcher, and no desktop interactions. Those are later milestones.
+Import intentionally filters:
 
-## Acceptance tests for enabling execution
+- .git
+- symlinks
+- common credential filenames
+- secret-like key and certificate suffixes
+- browser and credential database names
+- .env variants
+- common cache, virtual-environment, and dependency directories
 
-- An untrusted worker cannot read protected files, including through symlinks, bind mounts, alternate paths and open descriptors.
-- An untrusted worker cannot edit the deployed policy, broker, audit log, service definitions or approval database.
-- A worker cannot escape its mount namespace, acquire elevated privileges, access the user's desktop/session sockets, or connect to credential agents.
-- Critical actions fail without a scoped, expiring approval from the trusted controller.
-- GUI automation fails closed unless the owner has explicitly authorized that task and application; permission revocation stops further actions.
-- Kill/pause terminates all descendants and prevents further operations, without affecting interactive user applications.
-- No AI-authored text, scripts or repository instructions are allowed to redefine trust boundaries.
+Autonomous work happens only in a copy under:
 
-See the official systemd sandbox documentation: https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html
+    /var/lib/ctx-agent/workspaces
+
+The original user checkout is not automatically modified.
+
+## Mutation-contract enforcement
+
+The initial plan is created read-only and waits for owner approval.
+
+After every Codex worker turn, ctx-agent measures the actual filesystem state
+against the approved plan. Enforcement checks include:
+
+- changed-file count
+- approximate changed-line count
+- write-scope membership
+- new files
+- file deletions
+- dependency manifests and lock files
+- Nix, CI, and selected configuration paths
+- whether worker command network access was approved
+
+If the observed change exceeds authority, the plan enters awaiting_deviation.
+The managed project is not updated.
+
+The model cannot approve its own deviation.
+
+## Checkpoints
+
+Each completed milestone receives a private filesystem checkpoint. If an owner
+rejects a deviation, the active workspace is replaced with the most recent
+approved checkpoint, or with the approved project baseline when no milestone
+has completed yet.
+
+This prevents unauthorized edits from becoming the starting point for the next
+attempt.
+
+## Final apply
+
+ready_for_review is not completion. Before apply, ctx-agent repeats mutation
+contract checks and compares relevant managed-project files against the baseline
+captured at initial plan approval.
+
+Only a local owner command may copy the final workspace into the managed project.
+
+## ChatGPT and Codex credentials
+
+Owner authentication is initiated with:
+
+    ctx agent codex login
+
+or:
+
+    ctx agent chatgpt login
+
+The command delegates directly to the official Codex CLI in the owner's desktop
+session. The system ctx-agent daemon does not receive the login credential.
+
+The Codex bridge runs as the user specifically so normal Codex token refresh and
+account management remain outside the system service.
+
+## Important current limitation: Codex process visibility
+
+The current bridge invokes Codex as the desktop user. Codex itself therefore
+runs with the host read permissions of that user before its own tool sandbox is
+applied.
+
+The bridge disables user Codex configuration and rules for orchestrated turns,
+uses read-only mode for consultation, workspace-write for approved work, and
+keeps worker command network access off unless the owner-approved budget enables
+it. This materially reduces risk, but it is not equivalent to placing the whole
+Codex process behind a credential-separated OS sandbox.
+
+Do not treat the current bridge as proof that adversarial repository text can
+never induce Codex to inspect another user-readable host path.
+
+A later hardening milestone should separate Codex authentication from Codex tool
+execution so the worker process can be placed in a stronger mount namespace
+without exposing reusable credentials inside that namespace.
+
+## Local Ollama sandbox
+
+The bounded local worker uses Bubblewrap around fixed file tools and predefined
+test commands. It receives a sanitized snapshot, not the user's home directory.
+
+Existing-file changes use an exact-span apply_patch operation. write_file only
+creates new files.
+
+Bubblewrap runs with unshared namespaces and without host network access.
+
+The outer systemd service intentionally permits the minimum facilities required
+for Bubblewrap to create its namespaces. In particular, AF_NETLINK is permitted
+for namespace setup and ProtectKernelTunables is not enabled because it can
+prevent creation of the sandbox's fresh /proc mount.
+
+## Permanent denials and protected material
+
+The policy layer permanently denies operations such as:
+
+- changing policy or audit controls
+- privilege escalation
+- process-memory reads
+- credential access
+- disk formatting or partitioning
+- background desktop capture
+
+These names are defense in depth, not a substitute for Linux isolation.
+
+## Approval policy
+
+Automatic:
+
+- work inside the approved write scope and mutation budget
+- administrator guidance that does not expand authority
+- retries below the approved milestone retry budget
+- checkpoint creation
+
+Owner approval required:
+
+- initial autonomous plan
+- new write paths
+- material line or file budget expansion
+- dependency changes not already approved
+- Nix, CI, or selected configuration changes not already approved
+- file deletion not already approved
+- worker command network access not already approved
+- repeated stalls or blocked milestones
+- final apply
+
+## No remote control plane
+
+ctx-agent has no HTTP listener.
+
+The system daemon listens on a local Unix socket. The user Codex bridge also
+listens on a local Unix socket. Socket permissions and local group membership
+are part of the authorization boundary.
+
+Never reverse-proxy either socket.
+
+## Remaining hardening work
+
+- credential-separated Codex execution sandbox
+- deterministic project-specific verification runners beyond the existing
+  bounded local test helpers
+- owner-reviewed export/sync back to original user Git checkouts
+- stronger race-resistant file-descriptor based copy/apply operations
+- dedicated audit log retention and optional signed approval records
+- host-verified integration tests for Bubblewrap, user services, ROCm, and Codex
+  on the target NixOS environment

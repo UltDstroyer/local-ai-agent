@@ -46,10 +46,29 @@ elif op == "write_file":
     data = args["content"]
     if not isinstance(data,str) or len(data.encode("utf-8")) > 150000:
         raise ValueError("Invalid content or oversized file")
-    if p.exists() and not p.is_file(): raise ValueError("Not a file")
+    if p.exists():
+        raise ValueError("write_file only creates new files; use apply_patch for edits")
     p.parent.mkdir(parents=True,exist_ok=True)
     p.write_text(data,encoding="utf-8")
-    print("wrote", str(p.relative_to(root)))
+    print("created", str(p.relative_to(root)))
+elif op == "apply_patch":
+    p = target(args["path"])
+    if not p.is_file() or p.stat().st_size > 150000:
+        raise ValueError("Missing, non-text or oversized file")
+    expected = args["expected"]
+    replacement = args["replacement"]
+    if not isinstance(expected,str) or not expected:
+        raise ValueError("Patch expected text must be non-empty")
+    if not isinstance(replacement,str):
+        raise ValueError("Patch replacement must be text")
+    data = p.read_text(encoding="utf-8")
+    if data.count(expected) != 1:
+        raise ValueError("Patch expected text must match exactly once")
+    updated = data.replace(expected,replacement,1)
+    if len(updated.encode("utf-8")) > 150000:
+        raise ValueError("Patched file is oversized")
+    p.write_text(updated,encoding="utf-8")
+    print("patched", str(p.relative_to(root)))
 else:
     raise ValueError("Unknown tool")
 '''
@@ -104,7 +123,7 @@ def run(settings: Settings, directory: Path, args: list[str],
 
 
 def file_tool(settings: Settings, directory: Path, name: str, args: dict, cancel=None):
-    if name not in ("list_files", "read_file", "write_file"):
+    if name not in ("list_files", "read_file", "write_file", "apply_patch"):
         raise SandboxError("Unknown file tool")
     return run(settings, directory, [settings.python, "-c",
                                      FILE_TOOL, name, json.dumps(args)],

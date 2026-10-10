@@ -2,43 +2,63 @@
 
 ## 0. Security contract
 
-- [x] Untrusted AI tools separated from host service
+- [x] Untrusted model output separated from owner authority
 - [x] Protected-file policy evaluator and tests
-- [x] No arbitrary host shell and no credentials exposed to worker
-- [ ] Host-specific isolation tests with real protected folders
+- [x] No arbitrary shell endpoint in ctx-agent
+- [x] ChatGPT/Codex credentials kept out of the system coordinator
+- [x] Actual-diff mutation-budget enforcement
+- [ ] Credential-separated OS sandbox around the entire Codex worker process
+- [ ] Host-specific negative tests against protected folders and sockets
 
 ## 1. Local service and task coordination
 
-- [x] SQLite persistent job queue and event log
-- [x] Unix-socket CLI, pause/resume, cancel, status, review/apply
-- [x] NixOS module, dedicated service account, sandboxed project copy
-- [ ] Confirm NixOS module builds and Bubblewrap works on the target desktop
-- [ ] Make active cancellation interrupt running model HTTP and sandbox operations immediately
-- [ ] Atomic conflict-safe patch application to concurrently edited source
+- [x] SQLite persistent job queue and audit events
+- [x] Unix-socket CLI, pause/resume, cancel, review/apply
+- [x] NixOS module and dedicated system account
+- [x] Disposable Bubblewrap project snapshots
+- [x] Exact-span patch tool for narrow local-model edits
+- [ ] Finish host verification of the /proc Bubblewrap fix
+- [ ] Make active cancellation interrupt model HTTP and Codex turns immediately
+- [ ] File-descriptor-based race-resistant final copy/apply
 
-## 2. Autonomous local development
+## 2. Codex project orchestration
 
-- [x] Local Ollama tool-loop with bounded steps
-- [x] Python source read/write and offline unittest/compile checks
-- [x] Per-project user-provided notes
-- [ ] Package manager and multi-language test runners with stronger sandbox profiles
-- [x] Sanitized import of a source directory from owner CLI
-- [ ] Git worktree branch/PR integration
+- [x] User-owned Codex bridge
+- [x] Sign in with ChatGPT command through the official Codex CLI
+- [x] Read-only Codex planning consultation
+- [x] Local administrator reconciliation
+- [x] Final Codex agreement required before presenting the plan
+- [x] Owner approval before execution
+- [x] Persistent plan, milestone, context, and Codex thread state
+- [x] File and line mutation budgets
+- [x] Dependency, configuration, deletion, and network capability flags
+- [x] Maximum-mode-only autonomous milestone execution
+- [x] Local administrator steering and retry limits
+- [x] Owner-approved deviation flow
+- [x] Milestone checkpoints and rollback after rejected deviations
+- [x] Final owner review and explicit apply
+- [ ] Deterministic project-specific build/test command contracts
+- [ ] Git worktree and commit checkpoints where original Git metadata is safe
+- [ ] Owner-reviewed export/sync back to the original checkout
 
 ## 3. Adaptive resources and media
 
-- [x] Quiet/balanced/maximum model request profiles (quiet still uses GPU)
-- [x] Opt-in companion: OBS recording control, owner-voice reference, F5-TTS and ffmpeg integration
-- [ ] Load-aware GPU scheduling, VRAM telemetry and application priority detection
-- [ ] Desktop consent GUI and agent-requested video/narration grants
-- [ ] Verify speech synthesis and GPU compatibility on Radeon ROCm
+- [x] Quiet, balanced, and maximum local-model profiles
+- [x] Balanced profile tuned for desktop responsiveness
+- [x] Opt-in OBS, owner-voice, TTS and ffmpeg companion
+- [ ] Load-aware GPU scheduling and VRAM telemetry
+- [ ] Desktop consent GUI for media and future interactive actions
+- [ ] Verify speech synthesis compatibility on the target Radeon ROCm host
 
 ## 4. Integrated computer agent
 
-- [ ] Trusted desktop broker (active-window checks, portal consent and revocation)
-- [ ] Expanded host filesystem access through reviewed broker, not an unsafe root shell
-- [ ] ctx context lifecycle hooks
-- [ ] Authenticated ChatGPT bridge and distributed laptop/Pi workers
-- [ ] Full end-to-end host security and regression test suite
+- [ ] Trusted desktop broker with active-window and portal consent
+- [ ] Expanded host filesystem access through a reviewed broker rather than an
+      unrestricted user shell
+- [ ] Distributed laptop and Raspberry Pi workers
+- [ ] Full host security and regression suite
+- [ ] Optional richer Codex App Server transport after the CLI bridge is
+      host-validated
 
-**Release state:** Technical preview. Do not call this fully unattended, host-wide, or plug-and-play yet.
+Release state: technical preview. Autonomous project work is deliberately
+limited to sanitized managed copies and explicit owner-approved mutation leases.

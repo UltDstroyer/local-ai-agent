@@ -49,6 +49,9 @@ class Settings:
     socket_group: str = "ctx-agent-users"
     bubblewrap: str = "bwrap"
     python: str = "/run/current-system/sw/bin/python3"
+    workspaces_dir: Path | None = None
+    checkpoints_dir: Path | None = None
+    codex_bridge_socket: Path | None = None
 
     @classmethod
     def load(cls, filename: str | os.PathLike) -> "Settings":
@@ -70,9 +73,25 @@ class Settings:
             raise ValueError("max_steps out of bounds")
         if type(worker_timeout) is not int or not 5 <= worker_timeout <= 180:
             raise ValueError("worker_timeout out of bounds")
+        state_dir = Path(d["state_dir"])
+        workspaces = d.get("workspaces_dir")
+        checkpoints = d.get("checkpoints_dir")
+        bridge = d.get("codex_bridge_socket")
+        for name, value in (
+            ("workspaces_dir", workspaces),
+            ("checkpoints_dir", checkpoints),
+            ("codex_bridge_socket", bridge),
+        ):
+            if value is not None and (
+                not isinstance(value, str) or not value.startswith("/")
+            ):
+                raise ValueError(f"{name} must be absolute")
         return cls(*(Path(d[k]) for k in required), ollama_url=url,
                    model=model, max_steps=max_steps,
                    worker_timeout=worker_timeout,
                    socket_group=d.get("socket_group", "ctx-agent-users"),
                    bubblewrap=d.get("bubblewrap", "bwrap"),
-                   python=d.get("python", "/run/current-system/sw/bin/python3"))
+                   python=d.get("python", "/run/current-system/sw/bin/python3"),
+                   workspaces_dir=Path(workspaces) if workspaces else state_dir / "workspaces",
+                   checkpoints_dir=Path(checkpoints) if checkpoints else state_dir / "checkpoints",
+                   codex_bridge_socket=Path(bridge) if bridge else None)
