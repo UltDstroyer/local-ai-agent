@@ -202,3 +202,34 @@ Never reverse-proxy either socket.
 - dedicated audit log retention and optional signed approval records
 - host-verified integration tests for Bubblewrap, user services, ROCm, and Codex
   on the target NixOS environment
+
+
+## SSH remote boundary
+
+Remote SSH work uses a separate user-owned ctx-ssh-bridge. The system
+coordinator never receives private keys, passwords, SSH_AUTH_SOCK, or the user's
+OpenSSH credential files.
+
+The bridge has no arbitrary shell RPC. It translates a fixed action vocabulary
+into quoted OpenSSH commands and re-validates every action against the
+owner-approved remote mutation budget.
+
+SSH connections require BatchMode, disable password and keyboard-interactive
+authentication, and require a previously trusted host key.
+
+Remote plans explicitly budget paths, services, packages, domains, sudo,
+network access, action count, and file writes. Out-of-contract actions pause as
+owner-visible deviations before they execute.
+
+Remote file writes are backed up before their first mutation in a milestone.
+Rejected deviations roll back current-milestone file changes. Package
+installation and systemd service state are not automatically reversed because
+uninstalling or stopping an approved service may itself be destructive.
+
+The broker intentionally excludes raw shell execution, sshd mutation, disk
+partitioning, firewall reset, account credential changes, and secret injection.
+
+Because ctx-ssh-bridge runs as the desktop user, compromise of that bridge would
+have the network and SSH reach of that user. Its narrow local Unix-socket
+protocol and group permissions are therefore critical security boundaries.
+See docs/REMOTE.md.
