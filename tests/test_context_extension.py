@@ -85,6 +85,49 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(result, 0)
         cli.assert_called_once_with(["apply", "job123"])
 
+    def test_plan_uses_active_context(self):
+        result, cli, _ = self.invoke(["plan", "Build the feature"])
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with([
+            "plan-create", "research", "Build the feature"
+        ])
+
+    def test_plan_approval_uses_active_context(self):
+        result, cli, _ = self.invoke(["approve"])
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with(["plan-approve", "research"])
+
+    def test_deviation_approval_routes_directly(self):
+        result, cli, _ = self.invoke(["deviation", "approve", "abc123def456"])
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with(["deviation-approve", "abc123def456"])
+
+    def test_codex_login_stays_in_user_session(self):
+        with patch.dict(os.environ, {
+            "CTX_CONTEXT": "",
+            "CTX_EXTENSION_API_VERSION": "1",
+        }):
+            with patch("ctx_agent.context_extension.agent_cli.main") as agent:
+                with patch(
+                    "ctx_agent.context_extension.codex_auth.main", return_value=0
+                ) as auth:
+                    result = main(["codex", "login"])
+        self.assertEqual(result, 0)
+        agent.assert_not_called()
+        auth.assert_called_once_with(["login"])
+
+    def test_chatgpt_is_alias_for_codex_auth(self):
+        with patch.dict(os.environ, {
+            "CTX_CONTEXT": "",
+            "CTX_EXTENSION_API_VERSION": "1",
+        }):
+            with patch(
+                "ctx_agent.context_extension.codex_auth.main", return_value=0
+            ) as auth:
+                result = main(["chatgpt", "status"])
+        self.assertEqual(result, 0)
+        auth.assert_called_once_with(["status"])
+
     def test_unknown_command_rejected(self):
         result, cli, _ = self.invoke(["arbitrary-host-shell"])
         self.assertEqual(result, 2)
