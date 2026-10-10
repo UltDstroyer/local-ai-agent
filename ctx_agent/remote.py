@@ -63,9 +63,17 @@ class RemoteTarget:
         port = raw.get("port", 22)
         if not valid_name(name):
             raise RemoteContractError("invalid target name")
-        if not isinstance(host, str) or not HOST_RE.fullmatch(host):
+        if (
+            not isinstance(host, str)
+            or not HOST_RE.fullmatch(host)
+            or host.startswith("-")
+        ):
             raise RemoteContractError("invalid SSH host")
-        if not isinstance(user, str) or not USER_RE.fullmatch(user):
+        if (
+            not isinstance(user, str)
+            or not USER_RE.fullmatch(user)
+            or user.startswith("-")
+        ):
             raise RemoteContractError("invalid SSH user")
         if type(port) is not int or not 1 <= port <= 65535:
             raise RemoteContractError("invalid SSH port")
