@@ -69,19 +69,27 @@ def inventory(root: Path):
     return files
 
 
-def create(source: Path, target: Path):
+def create(
+    source: Path,
+    target: Path,
+    *,
+    dir_mode: int = 0o700,
+    file_mode: int = 0o600,
+):
     if target.exists():
         raise SnapshotError("Snapshot destination already exists")
-    target.mkdir(parents=True, mode=0o700)
+    target.mkdir(parents=True, mode=dir_mode)
+    target.chmod(dir_mode)
     for rel, src in inventory(source).items():
         dst = target / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.parent.chmod(dir_mode)
         # Ignore symlinks and refuse unusual objects. Workers cannot see host files.
         if not src.is_file() or src.is_symlink():
             continue
         with src.open("rb") as inp, dst.open("xb") as out:
             shutil.copyfileobj(inp, out, MAX_SOURCE_FILE + 1)
-        dst.chmod(0o600)
+        dst.chmod(file_mode)
 
 
 def diff(source: Path, scratch: Path):
@@ -112,14 +120,16 @@ def diff(source: Path, scratch: Path):
     return changed, ("\n".join(preview))[:35000]
 
 
-def apply(source: Path, scratch: Path):
-    """A trusted owner-command-only operation, NOT exposed as an AI tool.
+def apply(source: Path, scratch: Path, *, allow_deletions: bool = False):
+    """Trusted owner-command-only copyback from an isolated workspace.
 
-    Apply modifies/new regular files but never deletes host files. Symlink
-    substitution and TOCTOU still require protection: live sources should be
-    owner-controlled project directories, not hostile concurrently edited trees.
+    Deletion remains disabled unless an approved project contract explicitly
+    allows it. Symlink substitution is refused at every destination.
     """
+    original = inventory(source)
+    current = inventory(scratch)
     changed, _ = diff(source, scratch)
+    deleted = sorted(set(original) - set(current)) if allow_deletions else []
     root = source.resolve(strict=True)
     for rel in changed:
         src = scratch / rel
@@ -134,7 +144,14 @@ def apply(source: Path, scratch: Path):
         with src.open("rb") as inp, temp.open("xb") as out:
             shutil.copyfileobj(inp, out)
         os.replace(temp, dst)
-    return changed
+    for rel in deleted:
+        dst = root / rel
+        if dst.is_symlink() or not dst.is_file():
+            raise SnapshotError(f"Unsafe deletion target: {rel}")
+        if not dst.resolve().is_relative_to(root):
+            raise SnapshotError(f"Deletion leaves project: {rel}")
+        dst.unlink()
+    return changed + deleted
 
 
 def import_files(source: Path, destination: Path) -> list[str]:
