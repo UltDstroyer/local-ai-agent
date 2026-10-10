@@ -3,10 +3,18 @@ let
   inherit (lib) mkEnableOption mkOption types mkIf mkMerge;
   cfg = config.services.ctxAgent;
   package = pkgs.callPackage ./package.nix { };
+  codexUser =
+    if cfg.codexOperatorUser != null then cfg.codexOperatorUser
+    else if cfg.operatorUsers != [] then builtins.head cfg.operatorUsers
+    else "";
   runtimeConfig = pkgs.writeText "ctx-agent-runtime.json" (builtins.toJSON {
     state_dir = "/var/lib/ctx-agent";
     socket_path = "/run/ctx-agent/agent.sock";
     projects_dir = "/var/lib/ctx-agent/projects";
+    workspaces_dir = "/var/lib/ctx-agent/workspaces";
+    checkpoints_dir = "/var/lib/ctx-agent/checkpoints";
+    codex_bridge_socket =
+      if codexUser == "" then null else "/run/ctx-codex/${codexUser}.sock";
     ollama_url = "http://127.0.0.1:11434/api/chat";
     model = cfg.model;
     max_steps = cfg.maxSteps;
@@ -23,6 +31,11 @@ in {
       default = [];
       example = [ "lena" ];
       description = "Existing accounts allowed to use the local ctx-agent socket.";
+    };
+    codexOperatorUser = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      description = "Desktop user whose Codex/ChatGPT login powers autonomous project work. Defaults to the first operatorUsers entry.";
     };
     model = mkOption {
       type = types.str;
@@ -63,9 +76,25 @@ in {
       };
       environment.systemPackages = [ package ];
       systemd.tmpfiles.rules = [
-        "d /var/lib/ctx-agent/projects 0770 ctx-agent ctx-agent-users - -"
+        "d /var/lib/ctx-agent/projects 2770 ctx-agent ctx-agent-users - -"
         "d /var/lib/ctx-agent/jobs 0700 ctx-agent ctx-agent-users - -"
+        "d /var/lib/ctx-agent/workspaces 2770 ctx-agent ctx-agent-users - -"
+        "d /var/lib/ctx-agent/checkpoints 0700 ctx-agent ctx-agent-users - -"
+        "d /run/ctx-codex 0770 root ctx-agent-users - -"
       ];
+
+      # The Codex bridge runs as the desktop user so ChatGPT/Codex credentials
+      # never enter the system ctx-agent process. Non-operator users exit cleanly.
+      systemd.user.services.ctx-codex-bridge = {
+        description = "User-owned Codex bridge for ctx-agent";
+        wantedBy = [ "default.target" ];
+        serviceConfig = {
+          Type = "simple";
+          ExecStart = "${package}/bin/ctx-agent-codex-bridge --socket /run/ctx-codex/%u.sock --group ctx-agent-users";
+          Restart = "on-failure";
+          RestartSec = 3;
+        };
+      };
       systemd.services.ctx-agent = {
         description = "ctx-agent local task queue and isolated model coordinator";
         wantedBy = [ "multi-user.target" ];
