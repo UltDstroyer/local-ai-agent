@@ -502,8 +502,9 @@ def run_remote_plan_step(settings, remote_store, row: dict, mode: str):
                 "prompt": (
                     "Perform a final read-only review of this remote project. "
                     "Do not propose or execute new mutations. Compare the goal, "
-                    "verification criteria, and latest inspection. Report any "
-                    "remaining problem.\nPLAN:\n"
+                    "verification criteria, and latest inspection. Return JSON only: "
+                    "{\"ready\": true, \"problems\": [\"...\"], "
+                    "\"summary\": \"...\"}.\nPLAN:\n"
                     + json.dumps(plan.to_dict())
                     + "\nINSPECTION:\n"
                     + inspection.get("output", "")[:26000]
@@ -512,12 +513,32 @@ def run_remote_plan_step(settings, remote_store, row: dict, mode: str):
             },
             timeout=730,
         )
+        if not review.get("ok"):
+            raise RemoteOrchestrationError("final Codex remote review failed")
+        verdict = _json_object(review.get("message", ""))
+        if verdict.get("ready") is not True:
+            problems = verdict.get("problems", [])
+            remote_store.create_deviation(
+                plan.id,
+                plan.target,
+                "final remote verification found unresolved problems",
+                {
+                    "type": "final_verification",
+                    "problems": problems if isinstance(problems, list) else [],
+                    "suggested_action": (
+                        "Review the reported verification problems and approve "
+                        "a narrow retry if more remote work is appropriate."
+                    ),
+                },
+            )
+            return
         remote_store.update_plan(
             plan.id,
             status="completed",
             result=(
-                "All approved remote milestones completed.\n\nFinal Codex review:\n"
-                + review.get("message", "")[:12000]
+                "All approved remote milestones completed and final Codex "
+                "verification passed.\n\n"
+                + str(verdict.get("summary", ""))[:12000]
             ),
         )
         remote_store.event(plan.id, "remote_plan_completed")
