@@ -1,6 +1,8 @@
+import stat
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from ctx_agent.remote import (
@@ -10,6 +12,7 @@ from ctx_agent.remote import (
     RemoteTarget,
     validate_remote_action,
 )
+from ctx_agent.remote_orchestrator import _remote_context_dir
 from ctx_agent.remote_store import RemoteStore
 from ctx_agent.ssh_bridge import SSHBridge, SSHBridgeError, _ssh_base
 
@@ -99,6 +102,21 @@ class RemoteContractTests(unittest.TestCase):
         plan = RemotePlan.from_dict(raw, "pi")
         self.assertEqual(plan.target, "pi")
         self.assertTrue(plan.budget.backup_required)
+
+
+class RemoteWorkspaceTests(unittest.TestCase):
+    def test_context_dir_inherits_setgid_from_workspace_parent(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "workspaces"
+            root.mkdir(mode=0o770)
+            root.chmod(0o2770)
+            settings = SimpleNamespace(workspaces_dir=root)
+
+            child = _remote_context_dir(settings, "abc123")
+
+            self.assertTrue(child.is_dir())
+            self.assertTrue(child.stat().st_mode & stat.S_ISGID)
+
 
 
 class RemoteStoreTests(unittest.TestCase):
