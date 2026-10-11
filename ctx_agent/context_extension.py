@@ -27,6 +27,7 @@ Current task:
   ctx agent progress
   ctx agent approve
   ctx agent reject
+  ctx agent deviation
   ctx agent deviations
   ctx agent plan show|cancel
   ctx agent plan "GOAL"
@@ -105,6 +106,13 @@ def _current_task(include_latest: bool = False) -> tuple[str, dict] | None:
         reverse=True,
     )
     return rows[0]
+
+
+def _known_project(name: str) -> bool:
+    if not name or not valid_name(name):
+        return False
+    projects = _raw({"op": "projects"}).get("projects", [])
+    return name in projects
 
 
 def _sole_target() -> str:
@@ -211,9 +219,7 @@ def _plan(rest: list[str]) -> int:
         return fail("finish or cancel the current task before creating another")
 
     context = os.environ.get("CTX_CONTEXT", "")
-    if context:
-        if not valid_name(context):
-            return fail("invalid active ctx context")
+    if context and _known_project(context):
         return agent_cli.main(["plan-create", context, rest[0]])
 
     target = _sole_target()
@@ -255,24 +261,32 @@ def _approval(action: str, rest: list[str]) -> int:
 
 
 def _deviation(rest: list[str]) -> int:
-    if not rest or rest[0] not in ("show", "approve", "reject"):
-        return fail("usage: ctx agent deviation show|approve|reject")
-    if len(rest) > 2:
-        return fail("usage: ctx agent deviation show|approve|reject [DEVIATION_ID]")
+    if not rest:
+        action = "show"
+        explicit_id = None
+    else:
+        if rest[0] not in ("show", "approve", "reject"):
+            return fail("usage: ctx agent deviation [show|approve|reject]")
+        if len(rest) > 2:
+            return fail(
+                "usage: ctx agent deviation [show|approve|reject] [DEVIATION_ID]"
+            )
+        action = rest[0]
+        explicit_id = rest[1] if len(rest) == 2 else None
 
     current = _current_task()
     if current is None:
         return fail("there is no active task")
     kind, row = current
 
-    if len(rest) == 2:
-        did = rest[1]
+    if explicit_id:
+        did = explicit_id
     else:
         _, deviation = _pending_deviation(kind, row)
         did = deviation["id"]
 
     prefix = "remote-" if kind == "remote" else ""
-    return agent_cli.main([prefix + "deviation-" + rest[0], did])
+    return agent_cli.main([prefix + "deviation-" + action, did])
 
 
 def _remote_deviation(rest: list[str]) -> int:
@@ -345,13 +359,7 @@ def main(argv=None) -> int:
         if action == "deviations":
             if rest:
                 return fail("usage: ctx agent deviations")
-            current = _current_task()
-            if current is None:
-                return fail("there is no active task")
-            kind, row = current
-            if kind == "remote":
-                return agent_cli.main(["remote-deviation-list", row["target"]])
-            return agent_cli.main(["deviation-list", row["project"]])
+            return _deviation([])
         if action == "deviation":
             return _deviation(rest)
         if action == "remote-deviation":
@@ -393,7 +401,7 @@ def main(argv=None) -> int:
             return agent_cli.main([action, *rest])
 
         return fail(f"unknown command {action!r}; use ctx agent help")
-    except ValueError as exc:
+    except (OSError, RuntimeError, ValueError, KeyError) as exc:
         return fail(str(exc))
 
 
