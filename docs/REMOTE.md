@@ -88,8 +88,10 @@ A remote plan includes:
     max_attempts_per_milestone
     backup_required
 
-Codex and the local administrator negotiate this contract before the owner sees
-it. No mutation starts until the owner approves it.
+Codex and the local manager negotiate this contract before the owner sees it.
+No mutation starts until the owner approves it. After approval, the contract and
+deterministic validator are the execution authority: the manager does not
+approve each individual in-contract action batch.
 
 ## Typed actions
 
@@ -167,14 +169,19 @@ For each milestone:
 1. ctx-agent gets a fresh read-only inspection.
 2. Codex proposes typed actions, or remote_exec when the approved plan grants
    remote-admin authority.
-3. The local administrator reviews necessity and task alignment.
-4. The contract validator checks ordinary typed scopes and verifies that any
-   remote_exec request has explicit remote-admin authority.
-5. The SSH broker executes the approved action on the named target.
-6. Results are returned to ctx-agent and persisted.
-7. A fresh inspection is taken.
-8. The local administrator decides whether the milestone is complete.
-9. Scope expansion or repeated failure pauses for owner approval.
+3. The deterministic contract validator checks scopes and capabilities.
+4. The SSH broker executes valid in-contract actions without a second model
+   approval step.
+5. Results are returned to ctx-agent and persisted.
+6. A fresh inspection is taken.
+7. The local manager reviews the milestone outcome, not every individual action,
+   and decides whether the milestone is complete, should continue, or is blocked.
+8. Scope expansion, repeated malformed proposals, or repeated execution failure
+   pauses for owner approval.
+
+This makes Qwen a governor rather than a foreman: it shapes the plan, enforces
+the owner-approved boundary, preserves durable context, and reviews milestone
+outcomes while Codex owns technical execution inside that boundary.
 
 ## Deviations
 
