@@ -1053,10 +1053,22 @@ class BossManagerEmployeeInvariantTests(unittest.TestCase):
             self.assertTrue(store.approve_plan(plan.id))
             self.assertEqual(store.next_plan()["status"], "running")
             first = store.create_deviation(
-                plan.id, "pi", "first", {"type": "manager_escalation"}
+                plan.id,
+                "pi",
+                "first",
+                {
+                    "type": "manager_escalation",
+                    "boss_request": "Choose whether to use the optional hostname.",
+                },
             )
             second = store.create_deviation(
-                plan.id, "pi", "second", {"type": "manager_escalation"}
+                plan.id,
+                "pi",
+                "second",
+                {
+                    "type": "manager_escalation",
+                    "boss_request": "Choose whether to use a different optional hostname.",
+                },
             )
             self.assertEqual(first, second)
             pending = [
