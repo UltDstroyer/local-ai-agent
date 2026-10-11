@@ -98,5 +98,38 @@ class PlanProgressTests(unittest.TestCase):
         ))
 
 
+    def test_progress_does_not_drop_when_worker_returns_to_manager_queue(self):
+        events = [
+            {"at": 110.0, "event": "remote_plan_approved_by_owner", "details": ""},
+            {"at": 170.0, "event": "remote_milestone_completed", "details": "1"},
+        ]
+        running = plan_snapshot(
+            self.row(status="running", current=1),
+            events,
+            remote=True,
+            mode="maximum",
+            paused=False,
+            now=240.0,
+        )
+        queued = plan_snapshot(
+            self.row(status="approved", current=1),
+            events,
+            remote=True,
+            mode="maximum",
+            paused=False,
+            now=245.0,
+        )
+        waiting = plan_snapshot(
+            self.row(status="awaiting_deviation", current=1),
+            events,
+            remote=True,
+            mode="maximum",
+            paused=False,
+            now=250.0,
+        )
+        self.assertEqual(running["percent_complete"], queued["percent_complete"])
+        self.assertEqual(queued["percent_complete"], waiting["percent_complete"])
+
+
 if __name__ == "__main__":
     unittest.main()
