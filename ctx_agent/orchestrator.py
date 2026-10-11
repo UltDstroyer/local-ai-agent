@@ -743,6 +743,7 @@ def _reset_local_transient_recovery(context: dict) -> dict:
     value = dict(context)
     for key in (
         "manager_recovery_cycles",
+        "hard_replan_cycles",
         "manager_review_recoveries",
         "worker_internal_recoveries",
     ):
