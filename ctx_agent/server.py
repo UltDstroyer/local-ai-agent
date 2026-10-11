@@ -793,6 +793,7 @@ class Coordinator:
                             "ssh_transport",
                             "remote_command",
                             "policy_scope",
+                            "codex_worker",
                         ):
                             context = dict(current.get("context", {}))
                             recoveries = int(
