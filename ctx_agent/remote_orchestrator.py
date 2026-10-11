@@ -1017,12 +1017,27 @@ Return JSON only:
         }
 
 
+def _is_remote_action_format_error(reason: str) -> bool:
+    lower = str(reason).lower()
+    return (
+        lower.startswith("invalid package_install format")
+        or lower.startswith("invalid service format")
+        or lower.startswith("remote action must be an object")
+        or lower.startswith("invalid command existence check")
+        or lower.startswith("unsupported remote service action format")
+    )
+
+
 def classify_remote_error(exc: Exception) -> dict:
     text = str(exc)
     lower = text.lower()
     if isinstance(exc, RemoteContractError):
-        kind = "policy_scope"
-        action = "Review the exact contract violation or requested scope expansion."
+        if _is_remote_action_format_error(text):
+            kind = "action_format"
+            action = "Repair the typed action shape internally and retry validation."
+        else:
+            kind = "policy_scope"
+            action = "Review the exact contract violation or requested scope expansion."
     elif isinstance(exc, SSHBridgeError) or "ssh " in lower:
         if "timed out" in lower or "timeout" in lower or "exceeded" in lower:
             kind = "timeout"
@@ -1474,6 +1489,34 @@ def run_remote_plan_step(
             checked = validate_remote_action(action, plan.budget)
         except RemoteContractError as exc:
             reason = str(exc)
+            if _is_remote_action_format_error(reason):
+                attempts = int(row["attempts"]) + 1
+                context["next_guidance"] = (
+                    "Qwen manager correction: the proposed typed remote action has an "
+                    "invalid package/service/action format. Correct the action schema "
+                    "and retry without involving the owner. Validator error: " + reason
+                )[:3000]
+                context = _append_history(
+                    context,
+                    {
+                        "milestone": index,
+                        "manager_recovery": "typed_action_format",
+                        "reason": reason[:1200],
+                        "action": action if isinstance(action, dict) else {},
+                    },
+                )
+                remote_store.event(
+                    plan.id,
+                    "remote_manager_recovered_action_format",
+                    reason[:1200],
+                )
+                remote_store.update_plan(
+                    plan.id,
+                    status="approved",
+                    attempts=min(attempts, plan.budget.max_attempts_per_milestone - 1),
+                    context=context,
+                )
+                return
             if reason.startswith("unsupported remote action"):
                 remote_store.create_deviation(
                     plan.id,
