@@ -264,6 +264,28 @@ class Store:
             raise ValueError(
                 "guarded plan state must use its dedicated transition method"
             )
+        # Owner-to-manager chat may arrive concurrently with a worker turn.
+        # Preserve owner-authored context keys when a stale worker writes back
+        # the rest of its context snapshot.
+        if "context" in fields and isinstance(fields["context"], dict):
+            with self.lock:
+                latest_row = self.db.execute(
+                    "SELECT context_json FROM plans WHERE id=?", (pid,)
+                ).fetchone()
+            latest_context = (
+                json.loads(latest_row["context_json"])
+                if latest_row and latest_row["context_json"] else {}
+            )
+            merged_context = dict(fields["context"])
+            for owner_key in (
+                "owner_guidance",
+                "last_owner_guidance",
+                "manager_conversation",
+            ):
+                if owner_key in latest_context:
+                    merged_context[owner_key] = latest_context[owner_key]
+            fields["context"] = merged_context
+
         encoded = {}
         for key, value in fields.items():
             if key == "context":
