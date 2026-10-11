@@ -268,6 +268,12 @@ class RemoteStore:
                 (time.time(), pid),
             )
             ok = cur.rowcount == 1
+            if ok:
+                self.db.execute(
+                    "UPDATE remote_deviations SET status='superseded',updated=? "
+                    "WHERE plan=? AND status='pending'",
+                    (time.time(), pid),
+                )
         if ok:
             self.event(pid, "remote_plan_cancelled_by_owner")
         return ok
