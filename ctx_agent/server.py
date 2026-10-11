@@ -978,6 +978,117 @@ class Coordinator:
             except Exception:
                 self.shutdown.wait(1)
 
+    def _prepare_remote_recovery_plan(self, failed: dict) -> dict | None:
+        context = dict(failed.get("context", {}))
+        existing = str(context.get("recovery_plan_id", "")).strip()
+        if existing:
+            row = self.remote_store.get_plan(existing)
+            if row:
+                return row
+        target_raw = self.remote_store.get_target(failed["target"])
+        if not target_raw:
+            return None
+        plan_raw = failed.get("plan") or {}
+        milestones = list(plan_raw.get("milestones", []))
+        index = int(failed.get("current_milestone", 0))
+        completed = milestones[:max(0, index)]
+        failed_stage = milestones[index] if 0 <= index < len(milestones) else ""
+        postmortem = context.get("hard_replan_postmortem") or {
+            "failure": failed.get("result", ""),
+            "recent_attempts": list(context.get("history", []))[-6:],
+        }
+        recovery_goal = (
+            "Create a major successor recovery plan for an existing failed plan. "
+            "Do not execute anything while planning. The replacement must be "
+            "materially different where the previous strategy failed and must "
+            "preserve already-correct work.\n\n"
+            f"Original goal:\n{failed.get('goal', '')}\n\n"
+            f"Failed plan ID: {failed.get('id', '')}\n"
+            f"Completed milestones: {json.dumps(completed)}\n"
+            f"Failed milestone: {failed_stage}\n"
+            f"Failure/postmortem: {json.dumps(postmortem)[:9000]}\n\n"
+            "Re-inspect the target and jointly determine what went wrong. "
+            "The resulting plan will require fresh owner approval before execution."
+        )
+        row = create_remote_plan(
+            self.settings,
+            self.remote_store,
+            RemoteTarget.from_dict(target_raw),
+            recovery_goal,
+            self.mode,
+        )
+        successor_context = dict(row.get("context", {}))
+        successor_context.update({
+            "recovery_of_plan_id": failed["id"],
+            "recovery_postmortem": postmortem,
+            "completed_prior_milestones": completed,
+        })
+        self.remote_store.update_plan(
+            row["id"],
+            context=successor_context,
+        )
+        context["recovery_plan_id"] = row["id"]
+        context["recovery_plan_required"] = False
+        self.remote_store.update_plan(
+            failed["id"],
+            context=context,
+        )
+        self.remote_store.event(
+            failed["id"],
+            "remote_recovery_plan_proposed",
+            row["id"],
+        )
+        return self.remote_store.get_plan(row["id"])
+
+    def _prepare_local_recovery_plan(self, failed: dict) -> dict | None:
+        context = dict(failed.get("context", {}))
+        existing = str(context.get("recovery_plan_id", "")).strip()
+        if existing:
+            row = self.store.get_plan(existing)
+            if row:
+                return row
+        project = failed["project"]
+        source = self.project(project)
+        plan_raw = failed.get("plan") or {}
+        milestones = list(plan_raw.get("milestones", []))
+        index = int(failed.get("current_milestone", 0))
+        completed = milestones[:max(0, index)]
+        failed_stage = milestones[index] if 0 <= index < len(milestones) else ""
+        postmortem = {
+            "failure": context.get("last_internal_failure") or failed.get("result", ""),
+            "recent_attempts": list(context.get("history", []))[-6:],
+        }
+        recovery_goal = (
+            "Create a major successor recovery plan for an existing failed project "
+            "plan. Do not execute anything while planning. Diagnose the previous "
+            "failure with Qwen and propose a materially new route for owner approval.\n\n"
+            f"Original goal:\n{failed.get('goal', '')}\n\n"
+            f"Failed plan ID: {failed.get('id', '')}\n"
+            f"Completed milestones: {json.dumps(completed)}\n"
+            f"Failed milestone: {failed_stage}\n"
+            f"Failure/postmortem: {json.dumps(postmortem)[:9000]}"
+        )
+        row = create_negotiated_plan(
+            self.settings,
+            self.store,
+            source,
+            project,
+            recovery_goal,
+            self.mode,
+        )
+        successor_context = dict(row.get("context", {}))
+        successor_context.update({
+            "recovery_of_plan_id": failed["id"],
+            "recovery_postmortem": postmortem,
+            "completed_prior_milestones": completed,
+        })
+        self.store.update_plan(row["id"], context=successor_context)
+        context["recovery_plan_id"] = row["id"]
+        context["recovery_plan_required"] = False
+        self.store.update_plan(failed["id"], context=context)
+        self.store.event(failed["id"], "recovery_plan_proposed", row["id"])
+        return self.store.get_plan(row["id"])
+
     def remote_plan_worker(self):
         while not self.shutdown.is_set():
             try:
