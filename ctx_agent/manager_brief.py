@@ -30,8 +30,26 @@ def _fallback_brief(deviation: dict) -> dict:
         summary = "This deviation needs your decision."
 
     recommendation = suggested[:500] if suggested else "Review this deviation and decide whether to approve it."
+    proposed = request.get("proposed_action") or request.get("action") or {}
+    request_text = ""
+    if isinstance(proposed, dict) and proposed:
+        op = str(proposed.get("op", "change"))
+        if op == "check":
+            target = proposed.get("service") or proposed.get("path") or proposed.get("url") or proposed.get("check")
+            request_text = f"Allow the requested {proposed.get('check', 'check')} on {target}."
+        elif op == "service":
+            request_text = f"Allow {proposed.get('action', 'a change')} for service {proposed.get('service', '')}."
+        elif op in ("write_file", "ensure_dir", "read_file"):
+            request_text = f"Allow {op.replace('_', ' ')} on {proposed.get('path', '')}."
+        elif op == "package_install":
+            request_text = "Allow installation of: " + ", ".join(str(x) for x in proposed.get("packages", []))
+        elif op == "remote_exec":
+            request_text = "Allow a high-trust remote administration command for this step."
+        else:
+            request_text = f"Allow the requested {op} operation."
     return {
         "summary": summary,
+        "request": request_text[:500],
         "risk": risk,
         "recommendation": recommendation,
         "decision": "Approve or reject this deviation?",
@@ -97,6 +115,7 @@ Return JSON only:
             risk = "medium"
         return {
             "summary": str(value.get("summary", "")).strip()[:700],
+            "request": str(value.get("request", "")).strip()[:500],
             "risk": risk,
             "recommendation": str(value.get("recommendation", "")).strip()[:500],
             "decision": str(value.get("decision", "")).strip()[:500],
