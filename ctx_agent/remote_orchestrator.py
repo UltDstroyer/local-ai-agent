@@ -627,6 +627,39 @@ def _human_input_error(input_request: object) -> str | None:
     return None
 
 
+def _normalize_human_input_request(input_request: object) -> dict | None:
+    if input_request is None:
+        return None
+    error = _human_input_error(input_request)
+    if error:
+        raise ValueError(error)
+    key = str(input_request["key"]).strip()
+    prompt_text = str(input_request["prompt"]).strip()[:300]
+    reason_text = str(input_request["reason"]).strip()[:600]
+    combined = (key + " " + prompt_text + " " + reason_text).lower()
+    secret_markers = (
+        "password",
+        "passwd",
+        "token",
+        "secret",
+        "api key",
+        "api_key",
+        "access key",
+        "credential",
+        "private key",
+        "client secret",
+    )
+    sensitive = input_request.get("sensitive", False) is True or any(
+        marker in combined for marker in secret_markers
+    )
+    return {
+        "key": key,
+        "prompt": prompt_text,
+        "reason": reason_text,
+        "sensitive": sensitive,
+    }
+
+
 def _codex_manager_checkin_remote(
     settings,
     plan: RemotePlan,
@@ -646,6 +679,7 @@ def _codex_manager_checkin_remote(
         "owner_needed": manager_review.get("owner_needed", False),
         "owner_request": manager_review.get("owner_request", ""),
         "risk": manager_review.get("risk", "medium"),
+        "input_request": manager_review.get("input_request"),
     }
     prompt = f"""You are Codex, the senior technical engineer. Qwen is your manager.
 You are generally the stronger technical planner. Before the owner is interrupted,
@@ -870,17 +904,11 @@ strategy before escalating to the owner."""
         value["owner_request"] = owner_request.strip()[:500]
         risk = str(value.get("risk", "medium")).lower()
         value["risk"] = risk if risk in ("low", "medium", "high") else "medium"
-        input_request = value.get("input_request")
-        input_error = _human_input_error(input_request)
-        if input_error:
-            raise ValueError(input_error)
+        input_request = _normalize_human_input_request(
+            value.get("input_request")
+        )
         if input_request is not None:
-            value["input_request"] = {
-                "key": str(input_request["key"]).strip(),
-                "prompt": str(input_request["prompt"]).strip()[:300],
-                "reason": str(input_request["reason"]).strip()[:600],
-                "sensitive": input_request.get("sensitive", False),
-            }
+            value["input_request"] = input_request
             value["owner_needed"] = True
             if not value["owner_request"]:
                 value["owner_request"] = (
@@ -977,20 +1005,32 @@ or command output. Qwen and Codex must inspect those themselves."""
         num_predict=2048,
         num_ctx=12288,
     )
-    input_error = _human_input_error(value.get("input_request"))
-    if input_error:
-        # Observable machine state is not a boss input. Convert this into an
-        # internal replan and send Qwen/Codex back to inspect it themselves.
+    try:
+        input_request = _normalize_human_input_request(
+            value.get("input_request")
+        )
+    except ValueError:
+        # Observable or malformed requests stay inside the manager/engineer loop.
         value["owner_needed"] = False
         value["owner_request"] = ""
         value["input_request"] = None
         correction = (
             "Manager correction: do not ask the owner for observable system "
-            "state. Inspect it directly and continue. "
+            "state or malformed input. Inspect or repair it internally. "
         )
         value["codex_guidance"] = correction + str(
             value.get("codex_guidance", "")
         )[:2400]
+        return value
+
+    value["input_request"] = input_request
+    if input_request is not None:
+        value["owner_needed"] = True
+        owner_request = value.get("owner_request", "")
+        if not isinstance(owner_request, str) or not owner_request.strip():
+            value["owner_request"] = (
+                "Allow me to request one human-only input needed for this step."
+            )
     return value
 
 
