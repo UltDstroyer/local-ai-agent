@@ -25,6 +25,7 @@ from .remote import RemoteContractError, RemoteTarget
 from .remote_orchestrator import (
     RemoteOrchestrationError,
     approve_remote_deviation,
+    classify_remote_error,
     create_remote_plan,
     inspect_target,
     reject_remote_deviation,
@@ -699,18 +700,12 @@ class Coordinator:
                 except Exception as exc:
                     current = self.remote_store.get_plan(row["id"])
                     if current and current["status"] == "running":
+                        failure = classify_remote_error(exc)
                         self.remote_store.create_deviation(
                             row["id"],
                             row["target"],
-                            "Remote autonomous step stopped by a system/tool error",
-                            {
-                                "type": "system_error",
-                                "error": str(exc)[:4000],
-                                "suggested_action": (
-                                    "Check SSH/Codex bridges and remote connectivity, "
-                                    "then approve to retry."
-                                ),
-                            },
+                            "Remote autonomous step stopped: " + failure["type"],
+                            failure,
                         )
             except Exception:
                 self.shutdown.wait(1)
