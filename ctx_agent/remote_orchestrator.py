@@ -1245,7 +1245,10 @@ def classify_remote_error(exc: Exception) -> dict:
             kind = "policy_scope"
             action = "Review the exact contract violation or requested scope expansion."
     elif isinstance(exc, SSHBridgeError) or "ssh " in lower:
-        if "timed out" in lower or "timeout" in lower or "exceeded" in lower:
+        if "required human input is unavailable" in lower:
+            kind = "human_input_missing"
+            action = "Request only the missing ephemeral human input again."
+        elif "timed out" in lower or "timeout" in lower or "exceeded" in lower:
             kind = "timeout"
             action = "Retry after checking target responsiveness; do not change scope."
         elif "permission denied" in lower or "authentication" in lower:
