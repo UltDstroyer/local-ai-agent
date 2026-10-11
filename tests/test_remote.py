@@ -11,6 +11,7 @@ from ctx_agent.remote import (
     RemoteContractError,
     RemotePlan,
     RemoteTarget,
+    action_deviation,
     critical_remote_exec_reason,
     remote_exec_secret_exposure_reason,
     sensitive_remote_read_path,
@@ -40,6 +41,7 @@ from ctx_agent.remote_orchestrator import (
     _validated_remote_plan,
     classify_remote_error,
 )
+from ctx_agent.governance import valid_remote_owner_request
 from ctx_agent.remote_store import RemoteStore
 from ctx_agent.ssh_bridge import (
     SSHBridge,
@@ -511,6 +513,43 @@ class RemoteStoreTests(unittest.TestCase):
             "service": "cloudflared.service",
             "action": "start",
         }, approved))
+
+
+    def test_remote_scope_deviation_is_self_contained_and_governance_valid(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Configure nginx",
+            "milestones": ["Configure"],
+            "verification": ["nginx works"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(),
+        }, "pi")
+        request = action_deviation(
+            plan,
+            {
+                "op": "write_file",
+                "path": "/etc/nginx/sites-enabled/jellyfin.conf",
+                "content": "server {}",
+                "mode": "0644",
+            },
+            "write path requires owner expansion",
+        )
+        self.assertTrue(valid_remote_owner_request(request))
+        self.assertIn("jellyfin.conf", request["boss_request"])
+
+    def test_multi_package_action_is_preapproved_only_if_each_package_is_approved(self):
+        action = {
+            "op": "package_install",
+            "packages": ["cloudflared", "curl"],
+        }
+        self.assertFalse(_dependency_preapproved(
+            action,
+            {"packages:cloudflared"},
+        ))
+        self.assertTrue(_dependency_preapproved(
+            action,
+            {"packages:cloudflared", "packages:curl"},
+        ))
 
 
 class SSHBridgeTests(unittest.TestCase):
