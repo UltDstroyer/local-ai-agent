@@ -404,6 +404,14 @@ def _rollback_records(
     return result
 
 
+def _redact_input_values(text: str, inputs: dict[str, str]) -> str:
+    value = str(text)
+    for supplied in inputs.values():
+        if isinstance(supplied, str) and supplied:
+            value = value.replace(supplied, "[REDACTED]")
+    return value
+
+
 def _redact_result_outputs(result: dict, inputs: dict[str, str]) -> dict:
     if not isinstance(result, dict) or not inputs:
         return result
@@ -501,7 +509,19 @@ class Handler(socketserver.StreamRequestHandler):
             ValueError,
             json.JSONDecodeError,
         ) as exc:
-            response = {"ok": False, "error": str(exc)}
+            inputs = {}
+            if isinstance(request, dict):
+                raw_inputs = request.get("inputs") or {}
+                if isinstance(raw_inputs, dict):
+                    inputs = {
+                        str(key): value
+                        for key, value in raw_inputs.items()
+                        if isinstance(value, str)
+                    }
+            response = {
+                "ok": False,
+                "error": _redact_input_values(str(exc), inputs),
+            }
         except Exception:
             response = {"ok": False, "error": "internal SSH bridge error"}
         self.wfile.write((json.dumps(response) + "\n").encode())
