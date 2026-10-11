@@ -332,13 +332,39 @@ class RemoteStore:
         did = uuid.uuid4().hex[:12]
         now = time.time()
         with self.lock, self.db:
+            plan_row = self.db.execute(
+                "SELECT status FROM remote_plans WHERE id=?", (plan,)
+            ).fetchone()
+            if not plan_row:
+                raise ValueError("cannot create deviation for missing remote plan")
+
             existing = self.db.execute(
                 "SELECT id FROM remote_deviations WHERE plan=? AND status='pending' "
                 "ORDER BY created DESC LIMIT 1",
                 (plan,),
             ).fetchone()
             if existing:
-                return existing["id"]
+                if plan_row["status"] == "awaiting_deviation":
+                    return existing["id"]
+                self.db.execute(
+                    "UPDATE remote_deviations SET status='superseded',updated=? "
+                    "WHERE id=? AND status='pending'",
+                    (now, existing["id"]),
+                )
+
+            if plan_row["status"] != "running":
+                raise ValueError(
+                    "remote plan is no longer running; refusing stale deviation"
+                )
+            cur = self.db.execute(
+                "UPDATE remote_plans SET status='awaiting_deviation',updated=? "
+                "WHERE id=? AND status='running'",
+                (now, plan),
+            )
+            if cur.rowcount != 1:
+                raise ValueError(
+                    "remote plan changed concurrently; refusing stale deviation"
+                )
             self.db.execute(
                 "INSERT INTO remote_deviations("
                 "id,plan,target,status,reason,request_json,created,updated"
@@ -347,11 +373,6 @@ class RemoteStore:
                     did, plan, target, "pending", reason[:4000],
                     json.dumps(request), now, now,
                 ),
-            )
-            self.db.execute(
-                "UPDATE remote_plans SET status='awaiting_deviation',updated=? "
-                "WHERE id=?",
-                (now, plan),
             )
         self.event(plan, "remote_deviation_requested", did + ": " + reason[:1000])
         return did
