@@ -53,7 +53,11 @@ class PlanStoreTests(unittest.TestCase):
             self.assertEqual(store.next_plan()["status"], "running")
             did = store.create_deviation(
                 plan.id, "demo", "needs another file",
-                {"add_write_scope": ["helper.py"]},
+                {
+                    "type": "mutation_amendment",
+                    "add_write_scope": ["helper.py"],
+                    "mutation_budget": raw_plan()["mutation_budget"],
+                },
             )
             self.assertEqual(store.get_plan(plan.id)["status"], "awaiting_deviation")
             self.assertTrue(store.resolve_deviation(did, True))
@@ -71,10 +75,18 @@ class PlanStoreTests(unittest.TestCase):
             self.assertTrue(store.approve_plan(plan.id))
             self.assertEqual(store.next_plan()["status"], "running")
             first = store.create_deviation(
-                plan.id, "demo", "first", {"add_write_scope": ["helper.py"]}
+                plan.id, "demo", "first", {
+                    "type": "mutation_amendment",
+                    "add_write_scope": ["helper.py"],
+                    "mutation_budget": raw_plan()["mutation_budget"],
+                }
             )
             second = store.create_deviation(
-                plan.id, "demo", "second", {"add_write_scope": ["other.py"]}
+                plan.id, "demo", "second", {
+                    "type": "mutation_amendment",
+                    "add_write_scope": ["other.py"],
+                    "mutation_budget": raw_plan()["mutation_budget"],
+                }
             )
             self.assertEqual(first, second)
             pending = [
@@ -95,7 +107,10 @@ class PlanStoreTests(unittest.TestCase):
                     plan.id,
                     "demo",
                     "should not be possible",
-                    {"type": "manager_escalation"},
+                    {
+                        "type": "manager_escalation",
+                        "boss_request": "Choose whether this optional behavior is wanted.",
+                    },
                 )
             self.assertEqual(
                 store.get_plan(plan.id)["status"],
