@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from ctx_agent.contracts import Plan
 from ctx_agent.runtime import Settings
@@ -215,6 +216,57 @@ class PlanStoreTests(unittest.TestCase):
                 current["next_guidance"],
                 "Worker technical guidance.",
             )
+
+
+class ManagerChatIntentTests(unittest.TestCase):
+    def test_report_question_does_not_become_worker_guidance(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            projects = root / "projects"
+            projects.mkdir()
+            settings = Settings(root, root / "agent.sock", projects)
+            coordinator = Coordinator(settings)
+            project = projects / "demo"
+            project.mkdir()
+
+            plan = Plan.from_dict(raw_plan(), "demo")
+            coordinator.store.create_plan("demo", plan.goal, plan.to_dict())
+            coordinator.store.update_plan(
+                plan.id,
+                context={"next_guidance": "Existing technical guidance."},
+            )
+            row = coordinator.store.get_plan(plan.id)
+            retrospective = {
+                "report": {
+                    "headline": "Project history",
+                    "summary": "One stage completed and one remains.",
+                },
+                "progress": {"percent_complete": 50},
+                "current_plan_id": plan.id,
+                "plan_ids": [plan.id],
+            }
+
+            with patch.object(
+                coordinator,
+                "_manager_report",
+                return_value=retrospective,
+            ):
+                result = coordinator._manager_chat(
+                    row,
+                    "What have you done so far, what failed, and why?",
+                    remote=False,
+                )
+
+            current = coordinator.store.get_plan(plan.id)["context"]
+            self.assertEqual(
+                current["next_guidance"],
+                "Existing technical guidance.",
+            )
+            self.assertNotIn("last_owner_guidance", current)
+            self.assertNotIn("owner_guidance", current)
+            self.assertEqual(result["manager_report"], retrospective)
+            self.assertIn("One stage completed", result["reply"])
+
 
 
 class CoordinatorApprovalTests(unittest.TestCase):
