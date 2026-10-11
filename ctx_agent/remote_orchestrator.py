@@ -23,6 +23,7 @@ from .remote import (
     validate_remote_action,
 )
 from .ssh_bridge import SSHBridgeError, ssh_bridge_call
+from .governance import valid_remote_owner_request
 
 
 class RemoteOrchestrationError(RuntimeError):
@@ -3161,6 +3162,10 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
         )
     plan = RemotePlan.from_dict(row["plan"], row["target"], row["id"])
     request = deviation["request"]
+    if not valid_remote_owner_request(request):
+        raise RemoteOrchestrationError(
+            "this request is not eligible for boss approval under current governance"
+        )
     request_type = request.get("type")
     action_types = {
         "remote_scope",
