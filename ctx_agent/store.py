@@ -375,6 +375,44 @@ class Store:
             self.event(pid, "plan_cancelled_by_owner")
         return ok
 
+    def retry_internal_plan(self, pid: str) -> bool:
+        """Requeue only an internal failure or a legacy non-owner cancellation."""
+        with self.lock, self.db:
+            row = self.db.execute(
+                "SELECT status,context_json FROM plans WHERE id=?", (pid,)
+            ).fetchone()
+            if not row:
+                return False
+            status = row["status"]
+            if status == "cancelled":
+                owner_cancel = self.db.execute(
+                    "SELECT 1 FROM plan_events WHERE plan=? "
+                    "AND event='plan_cancelled_by_owner' LIMIT 1",
+                    (pid,),
+                ).fetchone()
+                if owner_cancel:
+                    return False
+            elif status != "failed_internal":
+                return False
+            context = json.loads(row["context_json"]) if row["context_json"] else {}
+            context["hard_replan_cycles"] = 0
+            context["next_guidance"] = (
+                "Qwen manager recovery: start a fresh Codex thread and choose a "
+                "materially different technical route from the current workspace "
+                "state. Preserve completed work and prior owner approvals."
+            )
+            now = time.time()
+            cur = self.db.execute(
+                "UPDATE plans SET status='approved',attempts=0,codex_thread='',"
+                "context_json=?,result='',error='',updated=? "
+                "WHERE id=? AND status IN ('failed_internal','cancelled')",
+                (json.dumps(context), now, pid),
+            )
+            ok = cur.rowcount == 1
+        if ok:
+            self.event(pid, "internal_plan_requeued", status)
+        return ok
+
     def next_plan(self):
         with self.lock, self.db:
             row = self.db.execute(
