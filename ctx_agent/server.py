@@ -441,18 +441,34 @@ class Coordinator:
             if expected.get("key") != key:
                 raise ValueError("Input key does not match this deviation")
             pid = deviation["plan"]
-            self.remote_inputs.setdefault(pid, {})[key] = supplied
             row = self.remote_store.get_plan(pid)
-            context = dict(row.get("context", {}))
+            if not row:
+                raise ValueError("Input deviation refers to a missing remote plan")
+            previous_inputs = dict(self.remote_inputs.get(pid, {}))
+            previous_context = dict(row.get("context", {}))
+            self.remote_inputs.setdefault(pid, {})[key] = supplied
+            context = dict(previous_context)
             available = list(context.get("available_inputs", []))
             if key not in available:
                 available.append(key)
             context["available_inputs"] = available[-20:]
             self.remote_store.update_plan(pid, context=context)
+            try:
+                plan = approve_remote_deviation(
+                    self.settings, self.remote_store, did
+                )
+            except Exception:
+                if previous_inputs:
+                    self.remote_inputs[pid] = previous_inputs
+                else:
+                    self.remote_inputs.pop(pid, None)
+                current = self.remote_store.get_plan(pid)
+                if current:
+                    self.remote_store.update_plan(
+                        pid, context=previous_context
+                    )
+                raise
             self.remote_store.event(pid, "remote_human_input_received", key)
-            plan = approve_remote_deviation(
-                self.settings, self.remote_store, did
-            )
             return {"plan": self._remote_plan_view(plan)}
 
         if op == "remote_deviation_list":
