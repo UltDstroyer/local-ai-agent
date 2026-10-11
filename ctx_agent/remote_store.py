@@ -413,7 +413,9 @@ class RemoteStore:
         with self.lock, self.db:
             cur = self.db.execute(
                 "UPDATE remote_deviations SET status=?,updated=? "
-                "WHERE id=? AND status='pending'",
+                "WHERE id=? AND status='pending' "
+                "AND EXISTS (SELECT 1 FROM remote_plans p "
+                "WHERE p.id=remote_deviations.plan AND p.status='awaiting_deviation')",
                 (status, time.time(), did),
             )
             return cur.rowcount == 1
