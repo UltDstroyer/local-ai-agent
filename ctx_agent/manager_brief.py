@@ -15,7 +15,14 @@ def _fallback_brief(deviation: dict) -> dict:
     suggested_value = request.get("suggested_action", "")
     suggested = suggested_value.strip() if isinstance(suggested_value, str) else ""
     manager = request.get("manager_review") or {}
-    manager_reason = str(manager.get("reason", "")).strip()
+    if not isinstance(manager, dict):
+        manager = {}
+    manager_reason_value = manager.get("reason", "")
+    manager_reason = (
+        manager_reason_value.strip()
+        if isinstance(manager_reason_value, str)
+        else ""
+    )
     risk = str(request.get("risk") or manager.get("risk") or "medium").lower()
     if risk not in ("low", "medium", "high"):
         risk = "medium"
