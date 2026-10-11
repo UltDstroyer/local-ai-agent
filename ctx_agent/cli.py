@@ -559,6 +559,11 @@ def main(argv=None):
     item.add_argument("key")
     item.add_argument("text")
 
+    item = sub.add_parser("plan-chat")
+    item.add_argument("project")
+    item.add_argument("id")
+    item.add_argument("message")
+
     item = sub.add_parser("plan-create")
     item.add_argument("project")
     item.add_argument("goal")
@@ -588,6 +593,11 @@ def main(argv=None):
     for cmd in ("target-show", "target-remove", "target-inspect"):
         item = sub.add_parser(cmd)
         item.add_argument("name")
+
+    item = sub.add_parser("remote-plan-chat")
+    item.add_argument("target")
+    item.add_argument("id")
+    item.add_argument("message")
 
     item = sub.add_parser("remote-plan-create")
     item.add_argument("target")
@@ -619,7 +629,7 @@ def main(argv=None):
     data = {"op": args.action.replace("-", "_")}
     for field in (
         "project", "prompt", "goal", "id", "key", "text", "mode",
-        "name", "ssh", "port", "target",
+        "name", "ssh", "port", "target", "message",
     ):
         if hasattr(args, field):
             value = getattr(args, field)
@@ -757,6 +767,14 @@ def main(argv=None):
             _print_plan_summary(result)
         elif args.action in ("plan-list", "remote-plan-list"):
             _print_plan_list(result)
+        elif args.action in ("plan-chat", "remote-plan-chat"):
+            print("[Qwen manager]", result.get("reply", ""))
+            pending = result.get("pending_deviation")
+            if isinstance(pending, dict) and pending.get("status") == "pending":
+                print(
+                    "  pending decision remains open: "
+                    + str(pending.get("id", ""))
+                )
         elif args.action in ("deviation-list", "remote-deviation-list"):
             _print_deviation_list(result)
         elif args.action in ("deviation-show", "remote-deviation-show"):
