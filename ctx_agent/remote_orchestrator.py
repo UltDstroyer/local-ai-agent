@@ -469,6 +469,12 @@ Fresh remote inspection:
 Persistent admin context:
 {json.dumps(row.get("context", {}))[-10000:]}
 
+Available human-input keys:
+{json.dumps(list((row.get("context", {}) or {}).get("available_inputs", [])))}
+
+If an available human input is needed in an action, reference it only as
+{{{{input:KEY}}}}. Never ask to see or repeat the actual value.
+
 Return JSON only:
 {{
   "actions": [
@@ -517,12 +523,23 @@ Return JSON only:
   "reason": "why",
   "owner_needed": false,
   "owner_request": "",
-  "risk": "low|medium|high"
+  "risk": "low|medium|high",
+  "input_request": null
 }}
 
-Set owner_needed=true only when you genuinely need a new boss decision or
-permission. Technical debugging and choosing a new implementation approach are
-your job with Codex.
+Set owner_needed=true only when you genuinely need a new boss decision,
+permission, or one human-only input. Technical debugging and choosing a new
+implementation approach are your job with Codex.
+
+If a human-only input is required, input_request must be exactly one object:
+{{
+  "key": "short_safe_name",
+  "prompt": "what the boss should enter",
+  "reason": "why this exact value is needed now",
+  "sensitive": true
+}}
+Never request multiple values together. Never include the value itself in your
+response, plan, context, or logs.
 
 If the current approach is failing repeatedly, use the full inspection, results,
 verification criteria, and prior context to choose a materially different
@@ -545,6 +562,34 @@ strategy before escalating to the owner."""
         value["owner_request"] = str(value.get("owner_request", "")).strip()[:500]
         risk = str(value.get("risk", "medium")).lower()
         value["risk"] = risk if risk in ("low", "medium", "high") else "medium"
+        input_request = value.get("input_request")
+        if input_request is not None:
+            if not isinstance(input_request, dict):
+                raise ValueError("input_request must be null or an object")
+            key = str(input_request.get("key", "")).strip()
+            prompt_text = str(input_request.get("prompt", "")).strip()
+            reason_text = str(input_request.get("reason", "")).strip()
+            sensitive = input_request.get("sensitive", False)
+            if (
+                not key
+                or len(key) > 64
+                or not key.replace("_", "").replace("-", "").isalnum()
+                or not prompt_text
+                or not reason_text
+                or type(sensitive) is not bool
+            ):
+                raise ValueError("invalid input_request")
+            value["input_request"] = {
+                "key": key,
+                "prompt": prompt_text[:300],
+                "reason": reason_text[:600],
+                "sensitive": sensitive,
+            }
+            value["owner_needed"] = True
+            if not value["owner_request"]:
+                value["owner_request"] = (
+                    "Allow Qwen to request one human-only input needed for this step."
+                )
         if value["owner_needed"] and not value["owner_request"]:
             raise ValueError("owner_needed requires one concrete owner_request")
         return value
@@ -1168,6 +1213,7 @@ def run_remote_plan_step(
                 "target": target.to_dict(),
                 "budget": plan.budget.to_dict(),
                 "action": action,
+                "inputs": inputs,
                 "plan": plan.id,
                 "milestone": index,
             },
@@ -1332,6 +1378,7 @@ def run_remote_plan_step(
                 "reason": review.get("reason", ""),
                 "boss_request": review.get("owner_request", ""),
                 "risk": review.get("risk", "medium"),
+                "input_request": review.get("input_request"),
                 "suggested_action": review.get("guidance", ""),
             },
         )
