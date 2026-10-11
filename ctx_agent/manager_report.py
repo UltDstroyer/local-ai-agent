@@ -155,6 +155,7 @@ def manager_progress_report(
             "updated": _when(row.get("updated")),
             "recovery_of": str(context.get("recovery_of_plan_id", "")),
             "recovery_delta": context.get("recovery_delta") or {},
+            "management_contract": context.get("management_contract") or {},
             "owner_guidance": list(context.get("owner_guidance") or [])[-6:],
         })
 
