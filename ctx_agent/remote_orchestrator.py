@@ -1359,6 +1359,50 @@ def _dependency_request_from_checkin(
     return None
 
 
+def _review_checkin_dependency(
+    settings,
+    plan: RemotePlan,
+    milestone: str,
+    dependency: object,
+    inspection: str,
+    mode: str,
+) -> dict:
+    """Require Qwen to confirm a dependency Codex identified in a check-in."""
+    request = _dependency_request_from_checkin(plan, dependency)
+    if request is None:
+        return {"state": "none"}
+    action = request.get("proposed_action") or {}
+    review = _manager_dependency_review(
+        settings,
+        plan,
+        milestone,
+        action,
+        {"summary": str((dependency or {}).get("reason", ""))},
+        inspection,
+        mode,
+    )
+    if review.get("internal_error"):
+        return {
+            "state": "internal_error",
+            "guidance": review.get("guidance", ""),
+            "reason": review.get("reason", ""),
+        }
+    if not review.get("needed"):
+        return {
+            "state": "not_needed",
+            "guidance": review.get("guidance", ""),
+            "reason": review.get("reason", ""),
+        }
+    approved_request = _dependency_owner_request(
+        plan,
+        action,
+        {"summary": review.get("reason", "")},
+        milestone,
+    )
+    approved_request["milestone"] = milestone
+    return {"state": "needed", "request": approved_request}
+
+
 def _dependency_key(action: dict) -> str | None:
     op = action.get("op")
     if op == "package_install":
@@ -2221,16 +2265,39 @@ def run_remote_plan_step(
                     "risk": checkin.get("risk"),
                 })[:1200],
             )
-            dependency_request = _dependency_request_from_checkin(
-                plan, checkin.get("dependency_request")
+            dependency_decision = _review_checkin_dependency(
+                settings,
+                plan,
+                plan.milestones[index],
+                checkin.get("dependency_request"),
+                inspection.get("output", ""),
+                mode,
             )
-            if dependency_request is not None:
-                dependency_request["milestone"] = plan.milestones[index]
+            if dependency_decision["state"] == "needed":
                 remote_store.create_deviation(
                     plan.id,
                     plan.target,
-                    "Qwen and Codex identified a missing required dependency",
-                    dependency_request,
+                    "Qwen and Codex need approval for a required remote dependency",
+                    dependency_decision["request"],
+                )
+            elif dependency_decision["state"] in ("internal_error", "not_needed"):
+                context["next_guidance"] = (
+                    dependency_decision.get("guidance")
+                    or "Reconsider the dependency and continue inside existing authority."
+                )[:3000]
+                remote_store.update_plan(
+                    plan.id,
+                    status="approved",
+                    attempts=0,
+                    context=context,
+                )
+                remote_store.event(
+                    plan.id,
+                    "remote_checkin_dependency_review",
+                    (
+                        dependency_decision["state"] + ": "
+                        + str(dependency_decision.get("reason", ""))[:1200]
+                    ),
                 )
             elif (
                 checkin.get("agreement") is False
@@ -2337,16 +2404,40 @@ def run_remote_plan_step(
             "risk": checkin.get("risk"),
         })[:1200],
     )
-    dependency_request = _dependency_request_from_checkin(
-        plan, checkin.get("dependency_request")
+    dependency_decision = _review_checkin_dependency(
+        settings,
+        plan,
+        plan.milestones[index],
+        checkin.get("dependency_request"),
+        inspection.get("output", ""),
+        mode,
     )
-    if dependency_request is not None:
-        dependency_request["milestone"] = plan.milestones[index]
+    if dependency_decision["state"] == "needed":
         remote_store.create_deviation(
             plan.id,
             plan.target,
-            "Qwen and Codex identified a missing required dependency",
-            dependency_request,
+            "Qwen and Codex need approval for a required remote dependency",
+            dependency_decision["request"],
+        )
+        return
+    if dependency_decision["state"] in ("internal_error", "not_needed"):
+        context["next_guidance"] = (
+            dependency_decision.get("guidance")
+            or "Reconsider the dependency and continue inside existing authority."
+        )[:3000]
+        remote_store.update_plan(
+            plan.id,
+            status="approved",
+            attempts=0,
+            context=context,
+        )
+        remote_store.event(
+            plan.id,
+            "remote_checkin_dependency_review",
+            (
+                dependency_decision["state"] + ": "
+                + str(dependency_decision.get("reason", ""))[:1200]
+            ),
         )
         return
     if checkin.get("agreement") is False and checkin.get("better_strategy"):
