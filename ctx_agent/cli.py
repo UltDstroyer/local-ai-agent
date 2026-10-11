@@ -864,6 +864,8 @@ def _manager_console(path, plan, *, remote):
             timeout=900,
         )
         print("[Qwen manager]", result.get("reply", ""))
+        if isinstance(result.get("manager_report"), dict):
+            _print_manager_report(result["manager_report"])
         pending = result.get("pending_deviation")
         if isinstance(pending, dict) and pending.get("status") == "pending":
             print("  pending decision remains open:", pending.get("id", ""))
@@ -1148,6 +1150,8 @@ def main(argv=None):
             _print_manager_report(result)
         elif args.action in ("plan-chat", "remote-plan-chat"):
             print("[Qwen manager]", result.get("reply", ""))
+            if isinstance(result.get("manager_report"), dict):
+                _print_manager_report(result["manager_report"])
             pending = result.get("pending_deviation")
             if isinstance(pending, dict) and pending.get("status") == "pending":
                 print(
