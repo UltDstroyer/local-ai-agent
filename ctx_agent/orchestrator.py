@@ -1158,13 +1158,19 @@ def approve_deviation(settings, store, source: Path, did: str) -> dict:
             "deviation is stale because the plan is no longer waiting for it"
         )
     request = deviation["request"]
+    request_type = request.get("type")
+    if request_type not in ("mutation_amendment", "manager_escalation"):
+        raise OrchestrationError(
+            "this local deviation type is obsolete or unsupported; reject it and "
+            "let Qwen/Codex re-evaluate under the current policy"
+        )
     if not store.resolve_deviation(did, True):
         raise OrchestrationError("deviation changed concurrently")
     current_row = store.get_plan(deviation["plan"])
     if not current_row:
         raise OrchestrationError("plan disappeared after deviation approval")
     plan = _plan_from_row(current_row)
-    if request.get("type") != "stalled":
+    if request_type == "mutation_amendment":
         plan = apply_amendment(plan, request)
         store.update_plan(plan.id, plan=plan.to_dict())
     context = dict(current_row.get("context", {}))
