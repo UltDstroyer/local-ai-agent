@@ -1431,7 +1431,7 @@ class DeviationResumeRaceTests(unittest.TestCase):
 
 
 class InternalFailureStateTests(unittest.TestCase):
-    def test_remote_internal_cancel_request_replans_instead(self):
+    def test_remote_internal_cancel_request_requires_successor(self):
         with tempfile.TemporaryDirectory() as td:
             store = RemoteStore(Path(td) / "remote.sqlite3")
             plan = RemotePlan.from_dict({
@@ -1452,9 +1452,12 @@ class InternalFailureStateTests(unittest.TestCase):
                 context={},
             )
             row = store.get_plan(plan.id)
-            self.assertEqual(row["status"], "approved")
-            self.assertEqual(row["context"]["hard_replan_cycles"], 1)
-            self.assertEqual(row["codex_thread"], "")
+            self.assertEqual(row["status"], "failed_internal")
+            self.assertTrue(row["context"]["recovery_plan_required"])
+            self.assertEqual(
+                row["context"]["last_internal_failure"],
+                "internal remote recovery exhausted",
+            )
 
     def test_remote_owner_cancel_stays_final(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1474,26 +1477,3 @@ class InternalFailureStateTests(unittest.TestCase):
             self.assertFalse(store.retry_internal_plan(plan.id))
             self.assertEqual(store.get_plan(plan.id)["status"], "cancelled")
 
-    def test_legacy_non_owner_cancel_can_be_requeued(self):
-        with tempfile.TemporaryDirectory() as td:
-            store = RemoteStore(Path(td) / "remote.sqlite3")
-            plan = RemotePlan.from_dict({
-                "goal": "demo",
-                "milestones": ["one"],
-                "verification": ["done"],
-                "risks": [],
-                "assumptions": [],
-                "remote_budget": budget(),
-            }, "pi")
-            store.create_plan("pi", plan.goal, plan.to_dict())
-            self.assertTrue(store.approve_plan(plan.id))
-            self.assertEqual(store.next_plan()["status"], "running")
-            with store.lock, store.db:
-                store.db.execute(
-                    "UPDATE remote_plans SET status='cancelled' WHERE id=?",
-                    (plan.id,),
-                )
-            self.assertTrue(store.retry_internal_plan(plan.id))
-            row = store.get_plan(plan.id)
-            self.assertEqual(row["status"], "approved")
-            self.assertIn("fresh Codex", row["context"]["next_guidance"])
