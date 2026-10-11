@@ -150,3 +150,38 @@ class HumanInputPromptTests(unittest.TestCase):
             value = _prompt_human_input(request)
         self.assertEqual(value, "media")
         mocked.assert_called_once()
+
+
+class PlainBossRequestTests(unittest.TestCase):
+    def test_raw_input_request_never_becomes_request_line(self):
+        deviation = {
+            "reason": "Qwen requests one owner decision",
+            "request": {
+                "boss_request": {
+                    "key": "cloudflared_status",
+                    "prompt": "Is cloudflared running?",
+                },
+                "input_request": {
+                    "key": "cloudflare_token",
+                    "prompt": "Cloudflare token",
+                    "reason": "Needed to authenticate.",
+                    "sensitive": True,
+                },
+            },
+        }
+        response = {
+            "content": json.dumps({
+                "summary": "Authentication requires one human-only credential.",
+                "request": "Allow me to request the Cloudflare credential.",
+                "risk": "medium",
+                "recommendation": "Approve if this is the intended tunnel.",
+                "decision": "May I request that credential?",
+            })
+        }
+        with patch("ctx_agent.manager_brief.ask", return_value=response):
+            brief = manager_deviation_brief(
+                SimpleNamespace(model="qwen3:8b"), deviation, "balanced"
+            )
+        self.assertIsInstance(brief["request"], str)
+        self.assertNotIn("{", brief["request"])
+        self.assertNotIn("cloudflared_status", brief["request"])
