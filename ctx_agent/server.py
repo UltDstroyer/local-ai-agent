@@ -786,16 +786,24 @@ class Coordinator:
                     current = self.remote_store.get_plan(row["id"])
                     if current and current["status"] == "running":
                         failure = classify_remote_error(exc)
-                        if failure["type"] in ("action_format", "codex_format"):
+                        if failure["type"] in (
+                            "action_format",
+                            "codex_format",
+                            "timeout",
+                            "ssh_transport",
+                            "remote_command",
+                            "policy_scope",
+                        ):
                             context = dict(current.get("context", {}))
                             recoveries = int(
                                 context.get("worker_internal_recoveries", 0)
                             ) + 1
                             context["worker_internal_recoveries"] = recoveries
                             context["next_guidance"] = (
-                                "Qwen manager correction: this is an internal formatting "
-                                "or schema problem, not an owner decision. Repair the "
-                                "typed action/dependency/input shape and retry. "
+                                "Qwen manager correction: this is an internal technical "
+                                "or policy-routing problem, not yet an owner decision. "
+                                "Diagnose it with Codex, repair the approach inside existing "
+                                "authority, and retry. "
                                 + str(failure.get("error", ""))[:1800]
                             )
                             if recoveries <= 3:
