@@ -809,12 +809,37 @@ class Coordinator:
                     current = self.store.get_plan(row["id"])
                     if current and current["status"] == "running":
                         failure = classify_project_error(exc)
-                        self.store.create_deviation(
-                            row["id"],
-                            row["project"],
-                            "Autonomous step stopped: " + failure["type"],
-                            failure,
-                        )
+                        if failure["type"] in (
+                            "codex_format",
+                            "codex_worker",
+                            "timeout",
+                            "workspace_tool",
+                        ):
+                            context = dict(current.get("context", {}))
+                            context["next_guidance"] = (
+                                "Qwen manager correction: this is an internal technical "
+                                "failure, not an owner decision. Diagnose it with Codex "
+                                "and retry or choose a supported approach. "
+                                + str(failure.get("error", ""))[:1800]
+                            )
+                            self.store.update_plan(
+                                row["id"],
+                                status="approved",
+                                attempts=0,
+                                context=context,
+                            )
+                            self.store.event(
+                                row["id"],
+                                "project_internal_failure_recovery",
+                                str(failure.get("error", ""))[:1200],
+                            )
+                        else:
+                            self.store.create_deviation(
+                                row["id"],
+                                row["project"],
+                                "Autonomous step stopped: " + failure["type"],
+                                failure,
+                            )
             except Exception:
                 self.shutdown.wait(1)
 
