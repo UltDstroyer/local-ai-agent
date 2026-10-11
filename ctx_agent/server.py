@@ -1020,13 +1020,24 @@ class Coordinator:
             "Re-inspect the target and jointly determine what went wrong. "
             "The resulting plan will require fresh owner approval before execution."
         )
-        row = create_remote_plan(
-            self.settings,
-            self.remote_store,
-            RemoteTarget.from_dict(target_raw),
-            recovery_goal,
-            self.mode,
-        )
+        self._planning_start("remote_plan", failed["target"])
+        try:
+            row = create_remote_plan(
+                self.settings,
+                self.remote_store,
+                RemoteTarget.from_dict(target_raw),
+                recovery_goal,
+                self.mode,
+                progress=lambda stage_index, stages=None: self._planning_update(
+                    "remote_plan", failed["target"], stage_index, stages
+                ),
+            )
+        except Exception as exc:
+            self._planning_finish(
+                "remote_plan", failed["target"], "failed", str(exc)
+            )
+            raise
+        self._planning_finish("remote_plan", failed["target"], "finished")
         successor_context = dict(row.get("context", {}))
         successor_context.update({
             "recovery_of_plan_id": failed["id"],
@@ -1084,14 +1095,25 @@ class Coordinator:
             f"Failed milestone: {failed_stage}\n"
             f"Failure/postmortem: {json.dumps(postmortem)[:9000]}"
         )
-        row = create_negotiated_plan(
-            self.settings,
-            self.store,
-            source,
-            project,
-            recovery_goal,
-            self.mode,
-        )
+        self._planning_start("project_plan", project)
+        try:
+            row = create_negotiated_plan(
+                self.settings,
+                self.store,
+                source,
+                project,
+                recovery_goal,
+                self.mode,
+                progress=lambda stage_index, stages=None: self._planning_update(
+                    "project_plan", project, stage_index, stages
+                ),
+            )
+        except Exception as exc:
+            self._planning_finish(
+                "project_plan", project, "failed", str(exc)
+            )
+            raise
+        self._planning_finish("project_plan", project, "finished")
         successor_context = dict(row.get("context", {}))
         successor_context.update({
             "recovery_of_plan_id": failed["id"],
