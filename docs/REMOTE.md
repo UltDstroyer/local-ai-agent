@@ -233,3 +233,80 @@ the typed file-backup mechanism.
 The user-owned SSH bridge itself has the same network reach and filesystem access
 as the desktop user because it must own the user's SSH credentials. The narrow
 Unix-socket request vocabulary is therefore a critical security boundary.
+
+
+## Manager escalation and autonomy
+
+Codex may request authority beyond the current remote contract by proposing the
+minimum typed action it needs. The deterministic validator still rejects that
+action first; the rejection becomes a scope request rather than an execution.
+
+Qwen then acts as the first approval tier:
+
+- low-risk and ordinary medium-risk typed expansions can be approved
+  automatically when Qwen determines they are minimal, on-task, and supported
+  by the latest inspection;
+- every manager approval is persisted as an audit event and becomes part of the
+  plan contract;
+- high-trust requests, including arbitrary remote_exec authority and sensitive
+  SSH, boot, disk, credential, or network-lockout paths, cannot be auto-approved
+  by Qwen and are escalated to the owner;
+- ambiguous requests are escalated rather than guessed.
+
+The authority ladder is therefore:
+
+    owner-approved plan
+        -> Codex engineer
+        -> deterministic contract validator
+        -> Qwen manager for narrow scope requests
+        -> owner only when Qwen cannot safely approve
+
+Qwen does not review every in-contract action. Its normal review is
+milestone-level and lightweight. Review depth increases after retries or
+failures.
+
+## Automatic recovery and self-repair
+
+Running remote plans are durable across coordinator restarts. If ctx-agent is
+restarted while a milestone is leased, the lease is returned to the approved
+queue, an audit event records the recovery, and Codex is instructed to take a
+fresh inspection before continuing. The system never assumes an interrupted
+remote command completed.
+
+Failed typed actions feed their exact output back into the same Codex thread.
+Codex gets bounded self-repair attempts inside the existing contract before the
+manager or owner is asked for more authority.
+
+## Error categories
+
+Remote autonomous failures are classified before a deviation is created.
+Current categories include:
+
+- policy_scope
+- codex_format
+- codex_worker
+- ssh_transport
+- remote_command
+- timeout
+- credentials
+
+The suggested recovery action is specific to the category. A validation error
+must not be presented as an SSH connectivity failure.
+
+## Live deviations
+
+After an owner approval command, the CLI remains attached while autonomous work
+is active. Progress is streamed to stderr. If the plan reaches a pending
+deviation, the deviation ID, concrete reason, manager decision, error detail,
+and recommended approve/reject command are printed immediately in that terminal.
+
+The plan continues to exist independently of the attached terminal; closing the
+terminal does not cancel autonomous execution.
+
+## Dynamic read-only discovery
+
+The fixed inspection now includes bounded lists of discovered systemd service
+units and currently running services. This gives Codex and Qwen current
+machine-specific context instead of relying only on a static list of common
+services. Newly discovered resources still pass through deterministic scope
+validation before mutation.
