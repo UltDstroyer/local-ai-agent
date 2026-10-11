@@ -27,8 +27,18 @@ def classify_project_error(exc: Exception) -> dict:
     text = str(exc)
     lower = text.lower()
     if isinstance(exc, ContractError):
-        kind = "policy_scope"
-        action = "Review the exact project contract violation."
+        lower_contract = text.lower()
+        if (
+            "malformed json" in lower_contract
+            or "did not return a json object" in lower_contract
+            or "response was not text" in lower_contract
+            or "format" in lower_contract
+        ):
+            kind = "codex_format"
+            action = "Repair the structured response internally and retry."
+        else:
+            kind = "policy_scope"
+            action = "Review the exact project contract violation."
     elif "codex" in lower and ("json" in lower or "format" in lower):
         kind = "codex_format"
         action = "Retry Codex with the exact formatting correction."
@@ -646,6 +656,31 @@ Return JSON only:
         }
 
 
+def _internal_recovery_cycle(
+    store,
+    plan: Plan,
+    context: dict,
+    *,
+    reason: str,
+    guidance: str,
+) -> bool:
+    """Consume a bounded manager recovery cycle without involving the owner."""
+    value = dict(context)
+    cycles = int(value.get("manager_recovery_cycles", 0)) + 1
+    value["manager_recovery_cycles"] = cycles
+    value["next_guidance"] = guidance[:4000]
+    store.event(plan.id, "manager_internal_recovery_cycle", f"{cycles}: {reason}"[:1500])
+    if cycles <= 3:
+        store.update_plan(
+            plan.id,
+            status="approved",
+            attempts=0,
+            context=value,
+        )
+        return True
+    return False
+
+
 def _append_context(context: dict, note: str, codex_message: str) -> dict:
     value = dict(context) if isinstance(context, dict) else {}
     history = list(value.get("history", []))
@@ -730,25 +765,32 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
         store.update_plan(plan.id, codex_thread=reply["thread_id"])
     if not reply.get("ok"):
         attempts = int(row["attempts"]) + 1
+        guidance = (
+            "The previous Codex turn failed. Qwen and Codex should diagnose the "
+            "failure together, choose a technically different route when useful, "
+            "and retry without expanding authority."
+        )
         if attempts >= plan.budget.max_attempts_per_milestone:
-            request = {
-                "type": "stalled",
-                "milestone": plan.milestones[index],
-                "attempts": attempts,
-                "codex_output": reply.get("events_tail", "")[-4000:],
-                "suggested_action": "Let the administrator replan or provide owner guidance.",
-            }
-            store.create_deviation(
-                plan.id, plan.project,
-                f"Codex stalled on milestone {index + 1} after {attempts} attempts",
-                request,
+            if _internal_recovery_cycle(
+                store,
+                plan,
+                context,
+                reason="Codex work turn repeatedly failed",
+                guidance=guidance,
+            ):
+                return
+            store.update_plan(
+                plan.id,
+                status="cancelled",
+                result=(
+                    "Qwen and Codex exhausted bounded internal recovery cycles "
+                    "without identifying a new owner decision or authority need."
+                ),
             )
+            store.event(plan.id, "manager_stopped_unproductive_loop", plan.milestones[index])
         else:
             context = dict(context)
-            context["next_guidance"] = (
-                "The previous Codex turn failed. Diagnose the failure without expanding "
-                "scope, then retry the milestone."
-            )
+            context["next_guidance"] = guidance
             store.update_plan(plan.id, status="approved", attempts=attempts, context=context)
         return
 
@@ -879,22 +921,23 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
             request,
         )
     elif attempts >= plan.budget.max_attempts_per_milestone:
-        request = {
-            "type": "stalled",
-            "milestone": plan.milestones[index],
-            "attempts": attempts,
-            "reason": review.get("reason", ""),
-            "boss_request": (
-                "Allow Qwen and Codex another bounded recovery cycle for this milestone."
+        if _internal_recovery_cycle(
+            store,
+            plan,
+            updated_context,
+            reason=str(review.get("reason", "")),
+            guidance=str(review.get("guidance", "")),
+        ):
+            return
+        store.update_plan(
+            plan.id,
+            status="cancelled",
+            result=(
+                "Qwen and Codex exhausted bounded internal recovery cycles "
+                "without identifying a genuine owner decision."
             ),
-            "risk": "low",
-            "suggested_action": review.get("guidance", ""),
-        }
-        store.create_deviation(
-            plan.id, plan.project,
-            "Qwen exhausted the recovery budget",
-            request,
         )
+        store.event(plan.id, "manager_stopped_unproductive_loop", plan.milestones[index])
     else:
         updated_context["next_guidance"] = str(review.get("guidance", ""))[:3000]
         store.update_plan(
