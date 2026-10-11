@@ -233,11 +233,24 @@ class RemoteStore:
             context["hard_replan_cycles"] = cycles
             prior = str(fields.get("result", "")).strip()
             context["last_internal_failure"] = prior[:2400]
+            history = list(context.get("history", []))
+            recent = history[-6:]
+            context["hard_replan_postmortem"] = {
+                "cycle": cycles,
+                "failure": prior[:2400],
+                "recent_attempts": recent,
+                "directive": (
+                    "Re-inspect current state and choose a materially different "
+                    "technical route. Do not repeat the same failed actions, "
+                    "assumptions, or dependency strategy."
+                ),
+            }
             if cycles <= 2:
                 context["next_guidance"] = (
                     "Qwen manager hard recovery: start a genuinely fresh technical "
                     "replan from the current observed state. Re-inspect first, open "
-                    "a fresh Codex thread, and do not repeat the failed strategy. "
+                    "a fresh Codex thread, and use hard_replan_postmortem to avoid "
+                    "repeating the failed strategy. "
                     + (("Previous failure: " + prior) if prior else "")
                 )[:3500]
                 fields["status"] = "approved"
