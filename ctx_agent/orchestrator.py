@@ -163,7 +163,10 @@ make that exact change visible in the returned contract so the owner can approve
 it."""
 
 
-def create_negotiated_plan(settings, store, source: Path, project: str, goal: str, mode: str) -> dict:
+def create_negotiated_plan(
+    settings, store, source: Path, project: str, goal: str, mode: str,
+    progress=None,
+) -> dict:
     if settings.codex_bridge_socket is None:
         raise OrchestrationError("Codex bridge is not configured")
     if not settings.codex_bridge_socket.exists():
@@ -178,8 +181,12 @@ def create_negotiated_plan(settings, store, source: Path, project: str, goal: st
             "Sign in with ChatGPT."
         )
 
+    if progress:
+        progress(0, None)
     files = _inventory_summary(source)
     notes = store.notes(project)
+    if progress:
+        progress(1, None)
     codex = bridge_call(
         settings.codex_bridge_socket,
         {
@@ -195,6 +202,8 @@ def create_negotiated_plan(settings, store, source: Path, project: str, goal: st
     candidate = _json_object(codex.get("message", ""))
     if isinstance(candidate.get("plan"), dict):
         candidate = candidate["plan"]
+    if progress:
+        progress(2, candidate.get("milestones", []))
 
     admin_message = ask(
         settings,
@@ -216,6 +225,8 @@ def create_negotiated_plan(settings, store, source: Path, project: str, goal: st
     )
     admin = _json_object(str(admin_message.get("content", "")))
     plan = Plan.from_dict(admin, project)
+    if progress:
+        progress(3, list(plan.milestones))
 
     agreement = None
     for round_number in range(2):
