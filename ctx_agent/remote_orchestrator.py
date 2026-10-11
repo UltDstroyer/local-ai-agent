@@ -3274,6 +3274,13 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
     current_row = remote_store.get_plan(deviation["plan"])
     if not current_row:
         raise RemoteOrchestrationError("remote plan disappeared after deviation approval")
+    if current_row.get("status") != "awaiting_deviation":
+        remote_store.event(
+            deviation["plan"],
+            "remote_deviation_decision_not_resumed",
+            did + ": plan changed concurrently",
+        )
+        return current_row
     plan = RemotePlan.from_dict(
         current_row["plan"], current_row["target"], current_row["id"]
     )
@@ -3309,9 +3316,15 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
             "Owner approved the exact requested remote decision. Continue narrowly.",
         )
     )[:3000]
-    remote_store.update_plan(
-        plan.id, status="approved", attempts=0, context=context
-    )
+    if not remote_store.resume_from_deviation(
+        plan.id, attempts=0, context=context
+    ):
+        remote_store.event(
+            plan.id,
+            "remote_deviation_decision_not_resumed",
+            did + ": plan changed concurrently",
+        )
+        return remote_store.get_plan(plan.id)
     remote_store.event(plan.id, "remote_deviation_approved_by_owner", did)
     return remote_store.get_plan(plan.id)
 
@@ -3323,6 +3336,10 @@ def reject_remote_deviation(settings, remote_store, did: str) -> dict:
     row = remote_store.get_plan(deviation["plan"])
     if not row:
         raise RemoteOrchestrationError("remote deviation has no plan")
+    if row.get("status") != "awaiting_deviation":
+        raise RemoteOrchestrationError(
+            "remote deviation is stale because the plan is no longer waiting for it"
+        )
 
     if not remote_store.resolve_deviation(did, False):
         raise RemoteOrchestrationError("remote deviation changed concurrently")
@@ -3330,6 +3347,13 @@ def reject_remote_deviation(settings, remote_store, did: str) -> dict:
     current = remote_store.get_plan(deviation["plan"])
     if not current:
         raise RemoteOrchestrationError("remote plan disappeared after rejection")
+    if current.get("status") != "awaiting_deviation":
+        remote_store.event(
+            deviation["plan"],
+            "remote_deviation_decision_not_resumed",
+            did + ": plan changed concurrently",
+        )
+        return current
     context = dict(current.get("context", {}))
     request = deviation.get("request") or {}
     if request.get("type") in ("dependency_install", "service_activation"):
@@ -3351,12 +3375,17 @@ def reject_remote_deviation(settings, remote_store, did: str) -> dict:
         "this plan, preserve completed in-contract work, and find an alternative "
         "inside the approved remote contract."
     )
-    remote_store.update_plan(
+    if not remote_store.resume_from_deviation(
         current["id"],
-        status="approved",
         attempts=0,
         context=context,
-    )
+    ):
+        remote_store.event(
+            current["id"],
+            "remote_deviation_decision_not_resumed",
+            did + ": plan changed concurrently",
+        )
+        return remote_store.get_plan(current["id"])
     remote_store.event(
         current["id"], "remote_deviation_rejected_by_owner", did
     )
