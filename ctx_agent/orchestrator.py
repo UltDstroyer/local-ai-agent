@@ -630,6 +630,34 @@ def _manager_amendment_review(
     mode: str,
 ) -> dict:
     budget = amendment.get("mutation_budget") or {}
+    current_budget = plan.budget.to_dict()
+    add_scope = amendment.get("add_write_scope") or []
+    pure_count_growth = (
+        not add_scope
+        and bool(budget)
+        and all(
+            budget.get(key) == current_budget.get(key)
+            for key in (
+                "allow_new_files",
+                "allow_file_deletion",
+                "allow_dependency_changes",
+                "allow_config_changes",
+                "allow_network",
+                "max_attempts_per_milestone",
+            )
+        )
+        and int(budget.get("max_files_changed", current_budget["max_files_changed"]))
+            >= current_budget["max_files_changed"]
+        and int(budget.get("max_lines_changed", current_budget["max_lines_changed"]))
+            >= current_budget["max_lines_changed"]
+    )
+    if pure_count_growth:
+        return {
+            "approve": True,
+            "escalate": False,
+            "reason": "file/line-count growth is manager bookkeeping, not new authority",
+        }
+
     high_risk = bool(
         budget.get("allow_file_deletion")
         or budget.get("allow_dependency_changes")
