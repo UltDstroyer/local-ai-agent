@@ -1025,7 +1025,7 @@ class BossManagerEmployeeInvariantTests(unittest.TestCase):
 
 
 
-    def test_owner_service_approval_does_not_persist_global_sudo(self):
+    def test_owner_service_approval_persists_only_dependency_identity(self):
         with tempfile.TemporaryDirectory() as td:
             store = RemoteStore(Path(td) / "remote.sqlite3")
             target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
@@ -1070,11 +1070,11 @@ class BossManagerEmployeeInvariantTests(unittest.TestCase):
                 [],
             )
             self.assertIn(
-                _owner_action_key(action),
-                approved["context"]["approved_action_leases"],
+                "service:cloudflared",
+                approved["context"]["approved_dependencies"],
             )
 
-    def test_owner_package_approval_is_exact_action_lease(self):
+    def test_owner_package_approval_persists_only_dependency_identity(self):
         with tempfile.TemporaryDirectory() as td:
             store = RemoteStore(Path(td) / "remote.sqlite3")
             target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
@@ -1115,8 +1115,8 @@ class BossManagerEmployeeInvariantTests(unittest.TestCase):
             self.assertFalse(remote_budget["allow_package_install"])
             self.assertNotIn("cloudflared", remote_budget["allowed_packages"])
             self.assertIn(
-                _owner_action_key(action),
-                approved["context"]["approved_action_leases"],
+                "packages:cloudflared",
+                approved["context"]["approved_dependencies"],
             )
 
 
