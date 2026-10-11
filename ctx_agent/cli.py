@@ -71,26 +71,27 @@ def _progress_line(progress):
 
 
 def _print_progress_report(progress):
-    print(f"Phase: {progress.get('phase', 'unknown')}")
+    print("[Qwen manager] progress")
+    print(f"  phase: {progress.get('phase', 'unknown')}")
     if progress.get("current_stage_name"):
         index = progress.get("current_stage_index")
         count = progress.get("stage_count")
         position = f"{index}/{count} " if index and count else ""
-        print(f"Current stage: {position}{progress['current_stage_name']}")
+        print(f"  current stage: {position}{progress['current_stage_name']}")
     if isinstance(progress.get("percent_complete"), int):
-        print(f"Progress: {progress['percent_complete']}%")
-    print(f"Elapsed: {_duration(progress.get('elapsed_seconds'))}")
+        print(f"  progress: {progress['percent_complete']}%")
+    print(f"  elapsed: {_duration(progress.get('elapsed_seconds'))}")
     remaining = progress.get("estimated_remaining_seconds")
     work = progress.get("estimated_work_remaining_seconds")
     if remaining is not None:
-        print(f"Estimated time left: ~{_duration(remaining)}")
+        print(f"  estimated time left: ~{_duration(remaining)}")
     elif work is not None:
-        print(f"Estimated work left: ~{_duration(work)}")
+        print(f"  estimated work left: ~{_duration(work)}")
     if progress.get("waiting_on"):
-        print("Waiting on:", progress["waiting_on"].replace("_", " "))
+        print("  waiting on:", progress["waiting_on"].replace("_", " "))
     stages = progress.get("stages") or progress.get("planning_stages") or []
     if stages:
-        print("Stages:")
+        print("  stages:")
         labels = {"complete": "done", "running": "active", "queued": "queued", "pending": "pending"}
         for stage in stages:
             status = labels.get(stage.get("status"), stage.get("status", "pending"))
@@ -99,11 +100,11 @@ def _print_progress_report(progress):
             print(f"  [{status}] {stage.get('index')}. {stage.get('name')}{suffix}")
     planned = progress.get("planned_execution_stages") or []
     if planned and not progress.get("stages"):
-        print("Planned execution stages:")
+        print("  planned execution stages:")
         for index, name in enumerate(planned, 1):
             print(f"  {index}. {name}")
     if progress.get("estimate_note"):
-        print("Estimate:", progress["estimate_note"])
+        print("  estimate:", progress["estimate_note"])
 
 
 def _call_with_progress(path, payload, progress_payload, timeout):
