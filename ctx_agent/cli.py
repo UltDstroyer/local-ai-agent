@@ -393,6 +393,39 @@ def main(argv=None):
 
         if args.action in ("plan-progress", "remote-plan-progress"):
             _print_progress_report(result["progress"])
+            phase = result["progress"].get("phase")
+            if phase not in (
+                "completed",
+                "cancelled",
+                "rejected",
+                "ready_for_owner_review",
+                "waiting_for_maximum_mode",
+                "paused",
+                "awaiting_deviation",
+            ):
+                remote = args.action == "remote-plan-progress"
+                scope = args.target if remote else args.project
+                pid = getattr(args, "id", None) or ""
+                if scope:
+                    _follow_approved_plan(
+                        args.socket,
+                        {
+                            "id": pid or result["progress"].get("plan_id", ""),
+                            "target" if remote else "project": scope,
+                        },
+                        remote=remote,
+                    )
+            elif phase == "awaiting_deviation":
+                remote = args.action == "remote-plan-progress"
+                scope = args.target if remote else args.project
+                pid = getattr(args, "id", None) or ""
+                if scope:
+                    _show_pending_deviation(
+                        args.socket,
+                        remote=remote,
+                        scope=scope,
+                        plan_id=pid,
+                    )
         elif args.action in ("deviation-show", "remote-deviation-show"):
             deviation = result["deviation"]
             brief = result.get("brief", {})
