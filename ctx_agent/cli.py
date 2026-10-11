@@ -162,6 +162,60 @@ def _prompt_human_input(request):
     return input(prompt + ": ")
 
 
+def _print_plan_summary(value):
+    plan = value.get("plan") or value
+    spec = plan.get("plan") or {}
+    scope = plan.get("project") or plan.get("target") or spec.get("project") or spec.get("target") or ""
+    goal = plan.get("goal") or spec.get("goal") or ""
+    status = plan.get("status", "unknown")
+    pid = plan.get("id", "")
+    print("[Qwen manager] plan status")
+    if pid:
+        print("  id:", pid)
+    if scope:
+        print("  scope:", scope)
+    print("  status:", status)
+    if goal:
+        print("  goal:", goal)
+    milestones = spec.get("milestones") or []
+    current = int(plan.get("current_milestone", 0) or 0)
+    if milestones:
+        if current < len(milestones):
+            print("  current:", milestones[current])
+        else:
+            print("  current: final verification/review")
+
+
+def _print_plan_list(result):
+    plans = result.get("plans") or []
+    if not plans:
+        print("[Qwen manager] no plans found")
+        return
+    print("[Qwen manager] plans")
+    for plan in plans:
+        spec = plan.get("plan") or {}
+        goal = str(plan.get("goal") or spec.get("goal") or "").replace("\n", " ")
+        scope = plan.get("project") or plan.get("target") or ""
+        print(
+            f"  {plan.get('id', '?')}  {plan.get('status', 'unknown')}  "
+            f"{scope}  {goal[:100]}"
+        )
+
+
+def _print_deviation_list(result):
+    deviations = result.get("deviations") or []
+    if not deviations:
+        print("[Qwen manager] no deviations")
+        return
+    print("[Qwen manager] deviations")
+    for item in deviations:
+        scope = item.get("project") or item.get("target") or ""
+        print(
+            f"  {item.get('id', '?')}  {item.get('status', 'unknown')}  {scope}"
+        )
+    if any(item.get("status") == "pending" for item in deviations):
+        print("  use ctx a d to view the current manager decision")
+
 def _print_live_deviation(deviation, brief):
     print("", file=sys.stderr)
     print("[Qwen manager] I need your decision", file=sys.stderr, flush=True)
@@ -464,6 +518,17 @@ def main(argv=None):
                         scope=scope,
                         plan_id=pid,
                     )
+        elif args.action in (
+            "plan-create",
+            "remote-plan-create",
+            "plan-show",
+            "remote-plan-show",
+        ):
+            _print_plan_summary(result)
+        elif args.action in ("plan-list", "remote-plan-list"):
+            _print_plan_list(result)
+        elif args.action in ("deviation-list", "remote-deviation-list"):
+            _print_deviation_list(result)
         elif args.action in ("deviation-show", "remote-deviation-show"):
             deviation = result["deviation"]
             brief = result.get("brief", {})
