@@ -249,6 +249,32 @@ class Store:
                     (time.time(), pid),
                 )
 
+    def resume_from_deviation(self, pid: str, **fields) -> bool:
+        """Apply a prepared deviation result only while the plan still waits."""
+        allowed = ["status","current_milestone","attempts","codex_thread","context","plan","result","error"]
+        if not fields or any(key not in allowed for key in fields):
+            raise ValueError("invalid plan deviation resume")
+        if fields.get("status", "approved") != "approved":
+            raise ValueError("deviation resume must return the plan to approved")
+        fields = dict(fields)
+        fields["status"] = "approved"
+        encoded = {}
+        if "context" in fields:
+            encoded["context_json"] = json.dumps(fields.pop("context"))
+        if "plan" in fields:
+            encoded["plan_json"] = json.dumps(fields.pop("plan"))
+        encoded.update(fields)
+        encoded["updated"] = time.time()
+        clause = ", ".join(f"{key}=?" for key in encoded)
+        values = list(encoded.values()) + [pid]
+        with self.lock, self.db:
+            cur = self.db.execute(
+                f"UPDATE plans SET {clause} "
+                "WHERE id=? AND status='awaiting_deviation'",
+                values,
+            )
+            return cur.rowcount == 1
+
     def approve_plan(self, pid: str) -> bool:
         with self.lock, self.db:
             cur = self.db.execute(
