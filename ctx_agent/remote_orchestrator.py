@@ -2033,6 +2033,7 @@ def run_remote_plan_step(
 
     validated = []
     approved_action_leases = set(context.get("approved_action_leases", []))
+    approved_dependencies = set(context.get("approved_dependencies", []))
     approved_critical_execs = set(context.get("approved_critical_execs", []))
     critical_batch_seen = set()
     for action in actions:
@@ -2165,7 +2166,11 @@ def run_remote_plan_step(
                     )
                     return
         dependency_key = _dependency_key(action)
-        if dependency_key and not owner_action_approved:
+        dependency_preapproved = (
+            dependency_key is not None
+            and dependency_key in approved_dependencies
+        )
+        if dependency_key and not owner_action_approved and not dependency_preapproved:
             dependency_review = _manager_dependency_review(
                 settings,
                 plan,
@@ -2272,7 +2277,7 @@ def run_remote_plan_step(
         try:
             validation_plan = (
                 _amend_budget_for_action(plan, action)
-                if owner_action_approved
+                if owner_action_approved or dependency_preapproved
                 else plan
             )
             checked = validate_remote_action(
@@ -2496,9 +2501,14 @@ def run_remote_plan_step(
     for action in validated:
         action_lease_key = _owner_action_key(action)
         owner_action_approved = action_lease_key in approved_action_leases
+        dependency_key = _dependency_key(action)
+        dependency_preapproved = (
+            dependency_key is not None
+            and dependency_key in approved_dependencies
+        )
         execution_plan = (
             _amend_budget_for_action(plan, action)
-            if owner_action_approved
+            if owner_action_approved or dependency_preapproved
             else plan
         )
         critical_owner_approved = False
@@ -2974,7 +2984,13 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
     )
 
     context = dict(current_row.get("context", {}))
-    if request_type in action_types:
+    if request_type in ("dependency_install", "service_activation"):
+        approved_dependencies = list(context.get("approved_dependencies", []))
+        dependency_key = str(request.get("dependency_key", "")).strip()
+        if dependency_key and dependency_key not in approved_dependencies:
+            approved_dependencies.append(dependency_key)
+        context["approved_dependencies"] = approved_dependencies[-50:]
+    elif request_type in ("remote_scope", "critical_remote_exec"):
         proposed_action = request.get("proposed_action")
         if isinstance(proposed_action, dict) and proposed_action:
             action_leases = list(context.get("approved_action_leases", []))
