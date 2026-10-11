@@ -387,6 +387,7 @@ new authority. Scope enforcement happens separately."""
             ],
             "balanced" if mode == "quiet" else mode,
             tools=[],
+            json_mode=True,
         )
         value = _json_object(str(response.get("content", "")))
         return {
@@ -431,6 +432,7 @@ Return JSON only:
             ],
             "balanced" if mode == "quiet" else mode,
             tools=[],
+            json_mode=True,
         )
         value = _json_object(str(response.get("content", "")))
         if value.get("state") not in ("complete", "continue", "blocked"):
