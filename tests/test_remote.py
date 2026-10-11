@@ -11,6 +11,7 @@ from ctx_agent.remote import (
     RemoteContractError,
     RemotePlan,
     RemoteTarget,
+    critical_remote_exec_reason,
     validate_remote_action,
 )
 from ctx_agent.remote_orchestrator import (
