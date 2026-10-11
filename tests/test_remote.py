@@ -1,3 +1,4 @@
+import json
 import stat
 import tempfile
 import unittest
