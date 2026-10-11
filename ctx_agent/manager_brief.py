@@ -10,8 +10,10 @@ from .agent import ask
 def _fallback_brief(deviation: dict) -> dict:
     request = deviation.get("request") or {}
     reason = str(deviation.get("reason", "")).strip()
-    error = str(request.get("error", "")).strip()
-    suggested = str(request.get("suggested_action", "")).strip()
+    error_value = request.get("error", "")
+    error = error_value.strip() if isinstance(error_value, str) else ""
+    suggested_value = request.get("suggested_action", "")
+    suggested = suggested_value.strip() if isinstance(suggested_value, str) else ""
     manager = request.get("manager_review") or {}
     manager_reason = str(manager.get("reason", "")).strip()
     risk = str(request.get("risk") or manager.get("risk") or "medium").lower()
@@ -31,7 +33,8 @@ def _fallback_brief(deviation: dict) -> dict:
 
     recommendation = suggested[:500] if suggested else "Review this deviation and decide whether to approve it."
     proposed = request.get("proposed_action") or request.get("action") or {}
-    request_text = str(request.get("boss_request", "")).strip()
+    boss_value = request.get("boss_request", "")
+    request_text = boss_value.strip() if isinstance(boss_value, str) else ""
     if not request_text and isinstance(proposed, dict) and proposed:
         op = str(proposed.get("op", "change"))
         if op == "check":
