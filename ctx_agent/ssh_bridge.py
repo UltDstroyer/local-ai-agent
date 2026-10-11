@@ -279,6 +279,17 @@ def _service(
     return _run_script(target, "set -eu; " + mapping[service_action], timeout=120)
 
 
+def _remote_exec(
+    target: RemoteTarget, budget: RemoteBudget, action: dict
+) -> dict:
+    """Execute an explicitly approved command on the SSH target only."""
+    command = action["command"]
+    timeout = action["timeout"]
+    if action["as_root"]:
+        command = _sudo(budget) + "sh -c " + _quote(command)
+    return _run_script(target, command, timeout=timeout)
+
+
 def _check(
     target: RemoteTarget, budget: RemoteBudget, action: dict
 ) -> dict:
@@ -409,6 +420,8 @@ class SSHBridge:
             return _service(target, budget, action)
         if action["op"] == "check":
             return _check(target, budget, action)
+        if action["op"] == "remote_exec":
+            return _remote_exec(target, budget, action)
         raise SSHBridgeError("unreachable remote action")
 
 

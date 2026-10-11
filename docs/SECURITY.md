@@ -210,24 +210,30 @@ Remote SSH work uses a separate user-owned ctx-ssh-bridge. The system
 coordinator never receives private keys, passwords, SSH_AUTH_SOCK, or the user's
 OpenSSH credential files.
 
-The bridge has no arbitrary shell RPC. It translates a fixed action vocabulary
-into quoted OpenSSH commands and re-validates every action against the
-owner-approved remote mutation budget.
+The bridge exposes no arbitrary local-shell RPC. It normally translates a fixed
+action vocabulary into quoted OpenSSH commands and re-validates every action
+against the owner-approved remote mutation budget. A remote plan may explicitly
+enable allow_remote_admin, which permits a remote_exec action on the named SSH
+target only.
 
 SSH connections require BatchMode, disable password and keyboard-interactive
 authentication, and require a previously trusted host key.
 
 Remote plans explicitly budget paths, services, packages, domains, sudo,
-network access, action count, and file writes. Out-of-contract actions pause as
-owner-visible deviations before they execute.
+network access, remote-admin authority, action count, and file writes.
+Out-of-contract actions pause as owner-visible deviations before they execute.
 
 Remote file writes are backed up before their first mutation in a milestone.
 Rejected deviations roll back current-milestone file changes. Package
 installation and systemd service state are not automatically reversed because
 uninstalling or stopping an approved service may itself be destructive.
 
-The broker intentionally excludes raw shell execution, sshd mutation, disk
-partitioning, firewall reset, account credential changes, and secret injection.
+Without allow_remote_admin the broker excludes arbitrary remote shell
+execution. With allow_remote_admin, arbitrary commands are permitted on the
+named SSH target, including root commands when allow_sudo is also approved.
+This does not create a desktop command-execution path. The SSH bridge does not
+enable agent forwarding. remote_exec is intentionally high trust and its
+mutations are not covered by the typed file rollback mechanism.
 
 Because ctx-ssh-bridge runs as the desktop user, compromise of that bridge would
 have the network and SSH reach of that user. Its narrow local Unix-socket

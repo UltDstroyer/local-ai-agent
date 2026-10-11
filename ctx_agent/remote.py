@@ -1,7 +1,9 @@
 """Remote target and SSH mutation contracts.
 
-Remote administration is expressed as typed actions. There is intentionally no
-arbitrary remote shell action in this module.
+Remote administration prefers typed actions. Plans may explicitly opt into the
+high-trust remote_exec capability for arbitrary commands on an SSH target.
+That capability exists only in the SSH bridge and never grants local desktop
+command execution.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ REMOTE_ACTIONS = frozenset({
     "package_install",
     "service",
     "check",
+    "remote_exec",
 })
 SERVICE_ACTIONS = frozenset({"status", "start", "restart", "enable", "enable_now"})
 CHECK_TYPES = frozenset({
@@ -141,6 +144,7 @@ class RemoteBudget:
     allow_sudo: bool = False
     allow_package_install: bool = False
     allow_network: bool = False
+    allow_remote_admin: bool = False
     max_actions: int = 40
     max_file_writes: int = 12
     max_attempts_per_milestone: int = 3
@@ -182,6 +186,7 @@ class RemoteBudget:
             "allow_sudo": raw.get("allow_sudo", False),
             "allow_package_install": raw.get("allow_package_install", False),
             "allow_network": raw.get("allow_network", False),
+            "allow_remote_admin": raw.get("allow_remote_admin", False),
             "backup_required": raw.get("backup_required", True),
         }
         if any(type(value) is not bool for value in bools.values()):
@@ -223,6 +228,7 @@ class RemoteBudget:
             "allow_sudo": self.allow_sudo,
             "allow_package_install": self.allow_package_install,
             "allow_network": self.allow_network,
+            "allow_remote_admin": self.allow_remote_admin,
             "max_actions": self.max_actions,
             "max_file_writes": self.max_file_writes,
             "max_attempts_per_milestone": self.max_attempts_per_milestone,
@@ -351,6 +357,33 @@ def validate_remote_action(action: object, budget: RemoteBudget) -> dict:
             raise RemoteContractError("unsupported service action")
         if service_action != "status" and not budget.allow_sudo:
             raise RemoteContractError("service mutation requires approved sudo capability")
+
+    elif op == "remote_exec":
+        if not budget.allow_remote_admin:
+            raise RemoteContractError(
+                "arbitrary remote administration is not approved"
+            )
+        command = action.get("command")
+        as_root = action.get("as_root", False)
+        timeout = action.get("timeout", 900)
+        if (
+            not isinstance(command, str)
+            or not command.strip()
+            or "\x00" in command
+            or len(command.encode()) > 50_000
+        ):
+            raise RemoteContractError("invalid remote command")
+        if type(as_root) is not bool:
+            raise RemoteContractError("remote_exec as_root must be boolean")
+        if as_root and not budget.allow_sudo:
+            raise RemoteContractError(
+                "root remote execution requires approved sudo capability"
+            )
+        if type(timeout) is not int or not 5 <= timeout <= 3600:
+            raise RemoteContractError("remote_exec timeout out of bounds")
+        result["command"] = command
+        result["as_root"] = as_root
+        result["timeout"] = timeout
 
     elif op == "check":
         check = action.get("check", "")
