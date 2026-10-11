@@ -943,6 +943,24 @@ def _manager_scope_review(
 ) -> dict:
     risk = _scope_risk(action)
     if isinstance(action, dict):
+        op = action.get("op")
+        if op in ("write_file", "ensure_dir"):
+            return {
+                "approve": False,
+                "escalate": True,
+                "risk": "medium",
+                "reason": "expanding remote write/sudo authority requires owner approval",
+            }
+        if (
+            op == "check"
+            and action.get("check") in ("http_get", "http_head")
+        ):
+            return {
+                "approve": False,
+                "escalate": True,
+                "risk": "medium",
+                "reason": "expanding external network authority requires owner approval",
+            }
         if action.get("op") == "package_install":
             return {
                 "approve": False,
@@ -1453,21 +1471,21 @@ def run_remote_plan_step(
                 requested_actions=action_count + len(actions),
             )
         except RemoteOrchestrationError as exc:
-            remote_store.create_deviation(
+            context["next_guidance"] = (
+                "The execution-count ceiling was reached. Replan into fewer, more "
+                "efficient actions without expanding authority. " + str(exc)
+            )[:3000]
+            remote_store.update_plan(
                 plan.id,
-                plan.target,
-                "Qwen reached the bounded execution-budget ceiling",
-                {
-                    "type": "execution_budget_ceiling",
-                    "reason": str(exc),
-                    "boss_request": (
-                        "Allow a larger execution-count ceiling for this plan."
-                    ),
-                    "risk": "low",
-                    "suggested_action": (
-                        "Increase only the bookkeeping ceiling; do not expand capabilities."
-                    ),
-                },
+                status="approved",
+                attempts=0,
+                codex_thread="",
+                context=context,
+            )
+            remote_store.event(
+                plan.id,
+                "remote_manager_replanned_execution_budget",
+                str(exc)[:1200],
             )
             return
 
@@ -1518,20 +1536,50 @@ def run_remote_plan_step(
                 )
                 return
             if reason.startswith("unsupported remote action"):
-                remote_store.create_deviation(
-                    plan.id,
-                    plan.target,
-                    reason,
+                recoveries = int(context.get("unsupported_action_recoveries", 0)) + 1
+                context["unsupported_action_recoveries"] = recoveries
+                context["next_guidance"] = (
+                    "Qwen manager correction: the broker does not support that action. "
+                    "Choose a supported typed action or a previously approved remote_exec "
+                    "route. Do not ask the owner merely because an implementation primitive "
+                    "is unsupported. Validator error: " + reason
+                )[:3000]
+                context = _append_history(
+                    context,
                     {
-                        "type": "manual_required",
-                        "reason": reason,
-                        "proposed_action": action if isinstance(action, dict) else {},
-                        "suggested_action": (
-                            "The broker intentionally does not support this action. "
-                            "Owner input is required or Codex must choose an alternative."
-                        ),
+                        "milestone": index,
+                        "manager_recovery": "unsupported_remote_action",
+                        "recovery_count": recoveries,
+                        "action": action if isinstance(action, dict) else {},
                     },
                 )
+                remote_store.event(
+                    plan.id,
+                    "remote_manager_recovered_unsupported_action",
+                    reason[:1200],
+                )
+                if recoveries <= 3:
+                    remote_store.update_plan(
+                        plan.id,
+                        status="approved",
+                        attempts=0,
+                        context=context,
+                    )
+                else:
+                    remote_store.update_plan(
+                        plan.id,
+                        status="cancelled",
+                        result=(
+                            "Qwen and Codex repeatedly chose unsupported broker actions "
+                            "without identifying a genuine owner decision."
+                        ),
+                        context=context,
+                    )
+                    remote_store.event(
+                        plan.id,
+                        "remote_manager_stopped_unsupported_action_loop",
+                        reason[:1200],
+                    )
                 return
 
             manager = _manager_scope_review(
@@ -1605,21 +1653,21 @@ def run_remote_plan_step(
                 requested_file_writes=file_write_count,
             )
         except RemoteOrchestrationError as exc:
-            remote_store.create_deviation(
+            context["next_guidance"] = (
+                "The file-write count ceiling was reached. Replan into fewer writes "
+                "without expanding paths or capabilities. " + str(exc)
+            )[:3000]
+            remote_store.update_plan(
                 plan.id,
-                plan.target,
-                "Qwen reached the bounded file-write ceiling",
-                {
-                    "type": "execution_budget_ceiling",
-                    "reason": str(exc),
-                    "boss_request": (
-                        "Allow a larger file-write count ceiling for this plan."
-                    ),
-                    "risk": "low",
-                    "suggested_action": (
-                        "Increase only the bookkeeping ceiling; do not expand paths or capabilities."
-                    ),
-                },
+                status="approved",
+                attempts=0,
+                codex_thread="",
+                context=context,
+            )
+            remote_store.event(
+                plan.id,
+                "remote_manager_replanned_file_budget",
+                str(exc)[:1200],
             )
             return
 
@@ -1861,21 +1909,37 @@ def run_remote_plan_step(
             },
         )
     elif attempts >= plan.budget.max_attempts_per_milestone:
-        remote_store.create_deviation(
-            plan.id,
-            plan.target,
-            "Qwen exhausted the recovery budget",
-            {
-                "type": "stalled",
-                "milestone": plan.milestones[index],
-                "reason": review.get("reason", ""),
-                "boss_request": (
-                    "Allow Qwen and Codex another bounded recovery cycle for this milestone."
+        cycles = int(context.get("manager_recovery_cycles", 0)) + 1
+        context["manager_recovery_cycles"] = cycles
+        context["next_guidance"] = str(review.get("guidance", ""))[:3000]
+        if cycles <= 3:
+            remote_store.update_plan(
+                plan.id,
+                status="approved",
+                attempts=0,
+                codex_thread="",
+                context=context,
+            )
+            remote_store.event(
+                plan.id,
+                "remote_manager_internal_recovery_cycle",
+                f"{cycles}: {str(review.get('reason', ''))[:1000]}",
+            )
+        else:
+            remote_store.update_plan(
+                plan.id,
+                status="cancelled",
+                result=(
+                    "Qwen and Codex exhausted bounded internal recovery cycles "
+                    "without identifying a genuine owner decision."
                 ),
-                "risk": "low",
-                "suggested_action": review.get("guidance", ""),
-            },
-        )
+                context=context,
+            )
+            remote_store.event(
+                plan.id,
+                "remote_manager_stopped_unproductive_loop",
+                plan.milestones[index],
+            )
     else:
         context["next_guidance"] = str(review.get("guidance", ""))[:3000]
         remote_store.update_plan(
