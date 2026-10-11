@@ -178,6 +178,32 @@ class BossViewTests(unittest.TestCase):
         self.assertTrue(first.startswith("mutation:"))
 
 
+    def test_generic_retry_escalations_are_never_boss_decisions(self):
+        for request in (
+            "Allow another retry for this milestone.",
+            "Approve one more recovery cycle.",
+            "May I debug the service and try again?",
+        ):
+            self.assertFalse(valid_remote_owner_request({
+                "type": "manager_escalation",
+                "boss_request": request,
+            }))
+
+    def test_generic_technical_authority_requires_typed_request(self):
+        self.assertFalse(valid_remote_owner_request({
+            "type": "manager_escalation",
+            "boss_request": "Allow me to restart the nginx service.",
+        }))
+        self.assertFalse(valid_remote_owner_request({
+            "type": "manager_escalation",
+            "boss_request": "Allow me to edit the nginx config file.",
+        }))
+        self.assertFalse(valid_local_owner_request({
+            "type": "manager_escalation",
+            "boss_request": "Allow me to install a new dependency.",
+        }))
+
+
 if __name__ == "__main__":
     unittest.main()
 
