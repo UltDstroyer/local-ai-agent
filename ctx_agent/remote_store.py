@@ -364,6 +364,45 @@ class RemoteStore:
             self.event(pid, "remote_plan_cancelled_by_owner")
         return ok
 
+    def retry_internal_plan(self, pid: str) -> bool:
+        """Requeue only an internal failure or a legacy non-owner cancellation."""
+        with self.lock, self.db:
+            row = self.db.execute(
+                "SELECT status,context_json FROM remote_plans WHERE id=?", (pid,)
+            ).fetchone()
+            if not row:
+                return False
+            status = row["status"]
+            if status == "cancelled":
+                owner_cancel = self.db.execute(
+                    "SELECT 1 FROM remote_events WHERE plan=? "
+                    "AND event='remote_plan_cancelled_by_owner' LIMIT 1",
+                    (pid,),
+                ).fetchone()
+                if owner_cancel:
+                    return False
+            elif status != "failed_internal":
+                return False
+            context = json.loads(row["context_json"]) if row["context_json"] else {}
+            context["hard_replan_cycles"] = 0
+            context["next_guidance"] = (
+                "Qwen manager recovery: re-inspect the current remote state, start "
+                "a fresh Codex thread, and build a materially different technical "
+                "route from what is already working. Preserve completed milestones "
+                "and prior owner approvals; do not repeat the failed strategy."
+            )
+            now = time.time()
+            cur = self.db.execute(
+                "UPDATE remote_plans SET status='approved',attempts=0,"
+                "codex_thread='',context_json=?,result='',error='',updated=? "
+                "WHERE id=? AND status IN ('failed_internal','cancelled')",
+                (json.dumps(context), now, pid),
+            )
+            ok = cur.rowcount == 1
+        if ok:
+            self.event(pid, "remote_internal_plan_requeued", status)
+        return ok
+
     def next_plan(self):
         with self.lock, self.db:
             row = self.db.execute(
