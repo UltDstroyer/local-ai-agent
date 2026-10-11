@@ -13,6 +13,7 @@ from pathlib import Path
 from .agent import run_agent
 from .codex_bridge import BridgeError
 from .contracts import ContractError, Plan, analyze_changes, contract_violations
+from .manager_brief import manager_deviation_brief
 from .orchestrator import (
     OrchestrationError,
     approve_deviation,
@@ -411,7 +412,12 @@ class Coordinator:
             if not deviation:
                 raise ValueError("No such remote deviation")
             if op == "remote_deviation_show":
-                return {"deviation": deviation}
+                return {
+                    "deviation": deviation,
+                    "brief": manager_deviation_brief(
+                        self.settings, deviation, self.mode
+                    ),
+                }
             if op == "remote_deviation_approve":
                 return {
                     "plan": approve_remote_deviation(
@@ -594,7 +600,12 @@ class Coordinator:
             if not deviation:
                 raise ValueError("No such deviation")
             if op == "deviation_show":
-                return {"deviation": deviation}
+                return {
+                    "deviation": deviation,
+                    "brief": manager_deviation_brief(
+                        self.settings, deviation, self.mode
+                    ),
+                }
             source = self.project(deviation["project"])
             if op == "deviation_approve":
                 return {
