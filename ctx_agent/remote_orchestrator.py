@@ -639,22 +639,28 @@ Rules:
     )
     if not reply.get("ok"):
         return {
-            "agreement": True,
-            "better_strategy": "",
-            "guidance_to_manager": "",
-            "owner_needed": manager_review.get("owner_needed", False),
-            "owner_request": manager_review.get("owner_request", ""),
+            "agreement": False,
+            "better_strategy": "Retry the internal Codex-Qwen check-in.",
+            "guidance_to_manager": (
+                "Codex check-in did not complete. Keep this internal and retry "
+                "before asking the owner."
+            ),
+            "owner_needed": False,
+            "owner_request": "",
             "risk": manager_review.get("risk", "medium"),
         }
     try:
         value = _json_object(reply.get("message", ""))
     except Exception:
         return {
-            "agreement": True,
-            "better_strategy": "",
-            "guidance_to_manager": "",
-            "owner_needed": manager_review.get("owner_needed", False),
-            "owner_request": manager_review.get("owner_request", ""),
+            "agreement": False,
+            "better_strategy": "Repair the Codex check-in response and retry.",
+            "guidance_to_manager": (
+                "Codex returned an invalid check-in response. Repair it internally "
+                "before asking the owner."
+            ),
+            "owner_needed": False,
+            "owner_request": "",
             "risk": manager_review.get("risk", "medium"),
         }
     value["owner_needed"] = value.get("owner_needed") is True
@@ -1048,7 +1054,8 @@ Return JSON only:
     except Exception as exc:
         return {
             "approve": False,
-            "escalate": True,
+            "escalate": False,
+            "internal_error": True,
             "risk": risk,
             "reason": "manager scope review failed: " + str(exc)[:1000],
         }
@@ -1651,6 +1658,38 @@ def run_remote_plan_step(
                 inspection.get("output", ""),
                 mode,
             )
+            if manager.get("internal_error"):
+                recoveries = int(context.get("manager_review_recoveries", 0)) + 1
+                context["manager_review_recoveries"] = recoveries
+                context["next_guidance"] = (
+                    "Qwen scope review failed internally. Retry the manager review "
+                    "and do not ask the owner to compensate for manager failure. "
+                    + str(manager.get("reason", ""))
+                )[:3000]
+                if recoveries <= 3:
+                    remote_store.update_plan(
+                        plan.id,
+                        status="approved",
+                        attempts=0,
+                        context=context,
+                    )
+                else:
+                    remote_store.update_plan(
+                        plan.id,
+                        status="cancelled",
+                        result=(
+                            "Qwen scope review repeatedly failed internally without "
+                            "producing a genuine owner decision."
+                        ),
+                        context=context,
+                    )
+                remote_store.event(
+                    plan.id,
+                    "remote_manager_scope_review_recovery",
+                    f"{recoveries}: {str(manager.get('reason', ''))[:1000]}",
+                )
+                return
+
             if manager["approve"]:
                 plan = _amend_budget_for_action(plan, action)
                 remote_store.update_plan(plan.id, plan=plan.to_dict())
@@ -1993,6 +2032,15 @@ def run_remote_plan_step(
         if checkin.get("owner_request"):
             review["owner_request"] = checkin["owner_request"]
         review["risk"] = checkin.get("risk", review.get("risk", "medium"))
+    elif review.get("owner_needed") is True:
+        review["owner_needed"] = False
+        review["owner_request"] = ""
+        review["state"] = "continue"
+        review["guidance"] = (
+            "Codex did not confirm that an owner decision is required. Continue "
+            "technical investigation internally and only escalate a concrete need "
+            "that both manager and engineer agree on."
+        )
     context["next_guidance"] = str(review.get("guidance", ""))[:3000]
     context = _append_history(
         context,
