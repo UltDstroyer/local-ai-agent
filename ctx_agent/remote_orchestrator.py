@@ -25,6 +25,7 @@ from .remote import (
 )
 from .ssh_bridge import SSHBridgeError, ssh_bridge_call
 from .governance import owner_decision_key, valid_remote_owner_request
+from .management import ensure_management_contract
 
 
 class RemoteOrchestrationError(RuntimeError):
@@ -522,12 +523,12 @@ def create_remote_plan(
     remote_store.update_plan(
         plan.id,
         codex_thread=codex.get("thread_id", ""),
-        context={
+        context=ensure_management_contract({
             "inspection": inspection.get("output", "")[:18000],
             "action_count": 0,
             "file_write_count": 0,
             "history": [],
-        },
+        }),
     )
     return remote_store.get_plan(plan.id)
 
