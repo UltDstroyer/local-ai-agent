@@ -481,7 +481,7 @@ class RemoteInvalidProposalRecoveryTests(unittest.TestCase):
         # The manager should recover malformed Codex action batches without
         # escalating a boss deviation merely because the employee returned bad JSON.
         self.assertIn(
-            "remote_manager_recovered_invalid_proposal",
+            "remote_manager_repaired_invalid_proposal",
             Path(__file__).resolve().parents[1]
             .joinpath("ctx_agent", "remote_orchestrator.py")
             .read_text(),
