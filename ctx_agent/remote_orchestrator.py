@@ -1821,17 +1821,84 @@ def run_remote_plan_step(
                     "why_different": str(replan.get("why_different", ""))[:1800],
                 },
             )
-            if replan.get("owner_needed") is True:
+            manager_review = {
+                "state": "blocked" if replan.get("owner_needed") is True else "continue",
+                "guidance": context["next_guidance"],
+                "reason": str(replan.get("why_different", ""))[:2000],
+                "owner_needed": replan.get("owner_needed") is True,
+                "owner_request": str(replan.get("owner_request", ""))[:500],
+                "risk": str(replan.get("risk", "medium"))[:16],
+            }
+            checkin = _codex_manager_checkin_remote(
+                settings,
+                plan,
+                row,
+                context_dir,
+                row.get("codex_thread", ""),
+                inspection.get("output", ""),
+                results,
+                manager_review,
+                mode,
+            )
+            remote_store.event(
+                plan.id,
+                "remote_codex_manager_replan_checkin",
+                json.dumps({
+                    "agreement": checkin.get("agreement"),
+                    "owner_needed": checkin.get("owner_needed"),
+                    "risk": checkin.get("risk"),
+                })[:1200],
+            )
+            dependency_request = _dependency_request_from_checkin(
+                plan, checkin.get("dependency_request")
+            )
+            if dependency_request is not None:
+                dependency_request["milestone"] = plan.milestones[index]
                 remote_store.create_deviation(
                     plan.id,
                     plan.target,
-                    "Qwen replanned and needs one owner decision",
+                    "Qwen and Codex identified a missing required dependency",
+                    dependency_request,
+                )
+            elif (
+                checkin.get("agreement") is False
+                and checkin.get("better_strategy")
+            ):
+                context["manager_strategy"] = str(
+                    checkin.get("better_strategy", "")
+                )[:3000]
+                context["next_guidance"] = str(
+                    checkin.get("guidance_to_manager")
+                    or checkin.get("better_strategy")
+                )[:3000]
+                remote_store.update_plan(
+                    plan.id,
+                    status="approved",
+                    attempts=0,
+                    codex_thread="",
+                    context=context,
+                )
+                remote_store.event(
+                    plan.id,
+                    "remote_codex_overrode_manager_replan",
+                    context["manager_strategy"][:1800],
+                )
+            elif checkin.get("owner_needed") is True:
+                remote_store.create_deviation(
+                    plan.id,
+                    plan.target,
+                    "Qwen and Codex need one owner decision",
                     {
                         "type": "manager_escalation",
                         "milestone": plan.milestones[index],
                         "reason": str(replan.get("why_different", ""))[:2000],
-                        "boss_request": str(replan.get("owner_request", ""))[:500],
-                        "risk": str(replan.get("risk", "medium"))[:16],
+                        "boss_request": str(
+                            checkin.get("owner_request")
+                            or replan.get("owner_request", "")
+                        )[:500],
+                        "risk": str(
+                            checkin.get("risk", replan.get("risk", "medium"))
+                        )[:16],
                         "input_request": replan.get("input_request"),
                         "suggested_action": context["next_guidance"],
                     },
