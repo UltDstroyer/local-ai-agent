@@ -184,6 +184,38 @@ def _print_plan_summary(value):
             print("  current:", milestones[current])
         else:
             print("  current: final verification/review")
+    remote_budget = spec.get("remote_budget") or {}
+    if remote_budget:
+        authority = []
+        if remote_budget.get("allow_sudo"):
+            authority.append("sudo")
+        if remote_budget.get("allow_package_install"):
+            authority.append("package installation")
+        if remote_budget.get("allow_network"):
+            authority.append("external network")
+        if remote_budget.get("allow_remote_admin"):
+            authority.append("remote admin")
+        services = remote_budget.get("allowed_services") or []
+        packages = remote_budget.get("allowed_packages") or []
+        if services:
+            authority.append("services: " + ", ".join(str(x) for x in services[:6]))
+        if packages:
+            authority.append("packages: " + ", ".join(str(x) for x in packages[:6]))
+        if authority:
+            print("  authority:", "; ".join(authority))
+    mutation_budget = spec.get("mutation_budget") or {}
+    if mutation_budget:
+        authority = []
+        if mutation_budget.get("allow_file_deletion"):
+            authority.append("file deletion")
+        if mutation_budget.get("allow_dependency_changes"):
+            authority.append("dependency changes")
+        if mutation_budget.get("allow_config_changes"):
+            authority.append("configuration changes")
+        if mutation_budget.get("allow_network"):
+            authority.append("network access")
+        if authority:
+            print("  authority:", "; ".join(authority))
 
 
 def _print_plan_list(result):
