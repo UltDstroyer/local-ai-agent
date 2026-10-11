@@ -281,6 +281,12 @@ class Store:
                 (time.time(), pid),
             )
             ok = cur.rowcount == 1
+            if ok:
+                self.db.execute(
+                    "UPDATE deviations SET status='superseded',updated=? "
+                    "WHERE plan=? AND status='pending'",
+                    (time.time(), pid),
+                )
         if ok:
             self.event(pid, "plan_cancelled_by_owner")
         return ok
