@@ -8,6 +8,8 @@ import threading
 import time
 import uuid
 from pathlib import Path
+
+from .eval_events import emit_eval_event
 from .governance import valid_local_owner_request
 
 SCHEMA = """
@@ -91,11 +93,13 @@ class Store:
                 )
 
     def event(self, job, kind, details=""):
+        at = time.time()
         with self.lock, self.db:
             self.db.execute(
                 "INSERT INTO events(job,at,event,details) VALUES (?,?,?,?)",
-                (job, time.time(), kind, str(details)[:4000]),
+                (job, at, kind, str(details)[:4000]),
             )
+        emit_eval_event("local", str(job or ""), kind, details, at=at)
 
     # ---------------- ordinary bounded jobs ----------------
 
@@ -529,6 +533,10 @@ class Store:
     def resolve_deviation(self, did: str, approved: bool) -> bool:
         status = "approved" if approved else "rejected"
         with self.lock, self.db:
+            row = self.db.execute(
+                "SELECT plan FROM deviations WHERE id=? AND status='pending'",
+                (did,),
+            ).fetchone()
             cur = self.db.execute(
                 "UPDATE deviations SET status=?,updated=? "
                 "WHERE id=? AND status='pending' "
@@ -537,6 +545,13 @@ class Store:
                 (status, time.time(), did),
             )
             ok = cur.rowcount == 1
+        if ok and row:
+            self.event(
+                row["plan"],
+                "deviation_approved_by_owner" if approved
+                else "deviation_rejected_by_owner",
+                did,
+            )
         return ok
 
     # ---------------- owner notes ----------------
