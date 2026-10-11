@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse
@@ -523,6 +524,23 @@ def create_remote_plan(
         },
     )
     return remote_store.get_plan(plan.id)
+
+
+_INPUT_REF_RE = re.compile(r"\{\{input:([A-Za-z0-9_-]{1,64})\}\}")
+
+
+def _inputs_for_action(action: dict, available: dict[str, str]) -> dict[str, str]:
+    """Return only ephemeral values explicitly referenced by this action."""
+    keys: set[str] = set()
+    if isinstance(action, dict):
+        for value in action.values():
+            if isinstance(value, str):
+                keys.update(_INPUT_REF_RE.findall(value))
+    return {
+        key: available[key]
+        for key in sorted(keys)
+        if key in available
+    }
 
 
 def _worker_prompt(plan: RemotePlan, row: dict, inspection: str) -> str:
@@ -2842,7 +2860,7 @@ def run_remote_plan_step(
                 "target": target.to_dict(),
                 "budget": execution_plan.budget.to_dict(),
                 "action": action,
-                "inputs": inputs,
+                "inputs": _inputs_for_action(action, inputs),
                 "critical_owner_approved": critical_owner_approved,
                 "plan": plan.id,
                 "milestone": index,
