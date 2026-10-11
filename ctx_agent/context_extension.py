@@ -114,6 +114,52 @@ def _single_current_plan():
         if item.get("status") in active_statuses
     ]
     if not candidates:
+        # Internal recovery exhaustion is not an owner cancellation. If the
+        # newest plan is an internal failure, or a legacy auto-cancelled plan
+        # from older ctx-agent code, "ctx a g" wakes it with a fresh engineer
+        # thread. The coordinator refuses this transition when an owner-cancel
+        # audit event exists.
+        recent = [
+            ("project", item) for item in local_plans
+        ] + [
+            ("target", item) for item in remote_plans
+        ]
+        if recent:
+            kind, item = max(
+                recent,
+                key=lambda pair: float(
+                    pair[1].get("updated")
+                    or pair[1].get("created")
+                    or 0
+                ),
+            )
+            if item.get("status") in ("failed_internal", "cancelled"):
+                try:
+                    if kind == "target":
+                        recovered = agent_cli.call(
+                            _socket_path(),
+                            {
+                                "op": "remote_plan_retry_internal",
+                                "target": item.get("target", ""),
+                                "id": item.get("id", ""),
+                            },
+                            timeout=30,
+                        )
+                    else:
+                        recovered = agent_cli.call(
+                            _socket_path(),
+                            {
+                                "op": "plan_retry_internal",
+                                "project": item.get("project", ""),
+                                "id": item.get("id", ""),
+                            },
+                            timeout=30,
+                        )
+                    plan = recovered.get("plan")
+                    if isinstance(plan, dict):
+                        return kind, plan
+                except (OSError, RuntimeError, ValueError, KeyError):
+                    pass
         raise ValueError("no active agent plan")
     if len(candidates) != 1:
         raise ValueError(
