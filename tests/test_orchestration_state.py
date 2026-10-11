@@ -179,6 +179,44 @@ class PlanStoreTests(unittest.TestCase):
             self.assertEqual(store.get_plan(plan.id)["status"], "cancelled")
 
 
+    def test_owner_chat_context_survives_stale_worker_write(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            store = Store(root / "state.sqlite3")
+            plan = Plan.from_dict(raw_plan(), "demo")
+            store.create_plan("demo", plan.goal, plan.to_dict())
+            stale = dict(store.get_plan(plan.id)["context"])
+
+            owner_context = dict(stale)
+            owner_context["owner_guidance"] = ["Do not replace nginx."]
+            owner_context["last_owner_guidance"] = "Do not replace nginx."
+            owner_context["manager_conversation"] = [
+                {"role": "owner", "content": "Do not replace nginx."}
+            ]
+            store.update_plan(plan.id, context=owner_context)
+
+            stale["next_guidance"] = "Worker technical guidance."
+            store.update_plan(plan.id, context=stale)
+
+            current = store.get_plan(plan.id)["context"]
+            self.assertEqual(
+                current["last_owner_guidance"],
+                "Do not replace nginx.",
+            )
+            self.assertEqual(
+                current["owner_guidance"],
+                ["Do not replace nginx."],
+            )
+            self.assertEqual(
+                current["manager_conversation"][0]["role"],
+                "owner",
+            )
+            self.assertEqual(
+                current["next_guidance"],
+                "Worker technical guidance.",
+            )
+
+
 class CoordinatorApprovalTests(unittest.TestCase):
     def test_owner_approval_records_baseline(self):
         with tempfile.TemporaryDirectory() as td:
