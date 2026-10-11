@@ -138,8 +138,14 @@ def summarize_remote_deviation(settings, deviation: dict, mode: str) -> dict:
                         "Explain what happened, whether any useful work succeeded, "
                         "why owner input is needed, and the safest next choice. "
                         "Use at most two short sentences for summary and one short "
-                        "sentence for recommendation. Return exactly: "
-                        '{"summary":"...","recommendation":"...","risk":"low|medium|high"}.\n'
+                        "sentence for recommendation. Mark auto_approve_safe=true "
+                        "only when approval merely retries or replans inside the "
+                        "already-approved remote contract and does not expand paths, "
+                        "packages, services, domains, sudo, network, remote-admin, "
+                        "credentials, destructive authority, or action/write budgets. "
+                        "Return exactly: "
+                        '{"summary":"...","recommendation":"...",'
+                        '"risk":"low|medium|high","auto_approve_safe":true|false}.\n'
                         + json.dumps(source)
                     ),
                 },
@@ -151,7 +157,8 @@ def summarize_remote_deviation(settings, deviation: dict, mode: str) -> dict:
         return {
             "summary": str(summary.get("summary", ""))[:500],
             "recommendation": str(summary.get("recommendation", ""))[:300],
-            "risk": str(summary.get("risk", "unknown"))[:20],
+            "risk": str(summary.get("risk", "unknown")).lower()[:20],
+            "auto_approve_safe": summary.get("auto_approve_safe") is True,
         }
     except Exception:
         reason = str(deviation.get("reason", "Remote work needs owner attention"))
@@ -162,6 +169,7 @@ def summarize_remote_deviation(settings, deviation: dict, mode: str) -> dict:
             "summary": reason[:500],
             "recommendation": recommendation[:300],
             "risk": "unknown",
+            "auto_approve_safe": False,
         }
 
 
@@ -1037,6 +1045,34 @@ def run_remote_plan_step(settings, remote_store, row: dict, mode: str):
             context=context,
             mutations=mutations,
         )
+
+
+def auto_approve_low_risk_remote_deviation(
+    settings, remote_store, did: str, mode: str
+) -> bool:
+    """Auto-approve only low-risk retries that do not expand remote authority."""
+    deviation = remote_store.get_deviation(did)
+    if not deviation or deviation.get("status") != "pending":
+        return False
+    request = deviation.get("request")
+    if not isinstance(request, dict):
+        return False
+    # Hard boundary: remote auto-approval must never widen the approved contract.
+    if request.get("type") not in ("stalled", "system_error"):
+        return False
+    assessment = summarize_remote_deviation(settings, deviation, mode)
+    if (
+        assessment.get("risk") != "low"
+        or assessment.get("auto_approve_safe") is not True
+    ):
+        return False
+    approve_remote_deviation(settings, remote_store, did)
+    remote_store.event(
+        deviation["plan"],
+        "remote_deviation_auto_approved_low_risk",
+        assessment.get("summary", "")[:1000],
+    )
+    return True
 
 
 def approve_remote_deviation(settings, remote_store, did: str) -> dict:
