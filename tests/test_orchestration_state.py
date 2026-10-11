@@ -144,7 +144,7 @@ class PlanStoreTests(unittest.TestCase):
             )
 
 
-    def test_internal_cancel_request_becomes_fresh_replan_not_cancelled(self):
+    def test_internal_cancel_request_becomes_failed_internal_not_cancelled(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             store = Store(root / "state.sqlite3")
@@ -159,29 +159,12 @@ class PlanStoreTests(unittest.TestCase):
                 context={},
             )
             row = store.get_plan(plan.id)
-            self.assertEqual(row["status"], "approved")
-            self.assertEqual(row["context"]["hard_replan_cycles"], 1)
-            self.assertIn("fresh technical", row["context"]["next_guidance"])
-
-    def test_internal_hard_replans_end_as_failed_internal(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            store = Store(root / "state.sqlite3")
-            plan = Plan.from_dict(raw_plan(), "demo")
-            store.create_plan("demo", plan.goal, plan.to_dict())
-            self.assertTrue(store.approve_plan(plan.id))
-            for cycle in range(3):
-                self.assertEqual(store.next_plan()["status"], "running")
-                row = store.get_plan(plan.id)
-                store.update_plan(
-                    plan.id,
-                    status="cancelled",
-                    result=f"internal failure {cycle}",
-                    context=row["context"],
-                )
-            row = store.get_plan(plan.id)
             self.assertEqual(row["status"], "failed_internal")
-            self.assertEqual(row["context"]["hard_replan_cycles"], 3)
+            self.assertTrue(row["context"]["recovery_plan_required"])
+            self.assertEqual(
+                row["context"]["last_internal_failure"],
+                "internal recovery exhausted",
+            )
 
     def test_owner_cancel_cannot_be_retried_as_internal_failure(self):
         with tempfile.TemporaryDirectory() as td:
