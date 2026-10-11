@@ -1482,12 +1482,85 @@ def run_remote_plan_step(
                     problem_text[:1500],
                 )
             return
+        manager_final = _completion_review(
+            settings,
+            plan,
+            "Final remote verification",
+            [{
+                "action": {"op": "final_review"},
+                "ok": True,
+                "returncode": 0,
+                "output": str(verdict.get("summary", ""))[:6000],
+            }],
+            inspection.get("output", ""),
+            mode,
+        )
+        final_context = dict(row.get("context", {}))
+        final_context = _append_history(
+            final_context,
+            {
+                "milestone": len(plan.milestones),
+                "admin": str(manager_final.get("context_note", ""))[:2500],
+                "state": manager_final.get("state", "continue"),
+                "codex_final_summary": str(verdict.get("summary", ""))[:2500],
+            },
+        )
+        if (
+            manager_final.get("state") != "complete"
+            or manager_final.get("owner_needed") is True
+        ):
+            cycles = int(
+                final_context.get("final_manager_review_recoveries", 0)
+            ) + 1
+            final_context["final_manager_review_recoveries"] = cycles
+            final_context["next_guidance"] = (
+                "Qwen did not sign off on final remote verification. Return to "
+                "the final implementation milestone, resolve the manager's "
+                "technical concerns, and turn any genuine new authority need "
+                "into one concrete structured action before involving the owner. "
+                + str(manager_final.get("guidance", ""))
+            )[:3000]
+            if cycles <= 3 and plan.milestones:
+                remote_store.update_plan(
+                    plan.id,
+                    status="approved",
+                    current_milestone=max(0, len(plan.milestones) - 1),
+                    attempts=0,
+                    codex_thread="",
+                    context=final_context,
+                )
+                remote_store.event(
+                    plan.id,
+                    "remote_final_manager_rework",
+                    (
+                        f"{cycles}: "
+                        + str(manager_final.get("reason", ""))[:1200]
+                    ),
+                )
+            else:
+                remote_store.update_plan(
+                    plan.id,
+                    status="cancelled",
+                    context=final_context,
+                    result=(
+                        "Codex and Qwen could not jointly verify the final remote "
+                        "state after bounded internal recovery."
+                    ),
+                )
+                remote_store.event(
+                    plan.id,
+                    "remote_final_manager_recovery_exhausted",
+                    str(manager_final.get("reason", ""))[:1200],
+                )
+            return
+
+        final_context["next_guidance"] = ""
         remote_store.update_plan(
             plan.id,
             status="completed",
+            context=final_context,
             result=(
-                "All approved remote milestones completed and final Codex "
-                "verification passed.\n\n"
+                "Codex and Qwen completed final remote verification.\n\n"
                 + str(verdict.get("summary", ""))[:12000]
             ),
         )
