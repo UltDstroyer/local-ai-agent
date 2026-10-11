@@ -17,7 +17,7 @@ from .contracts import (
     deviation_amendment,
 )
 from .snapshot import create, diff, inventory
-from .governance import valid_local_owner_request
+from .governance import owner_decision_key, valid_local_owner_request
 
 
 class OrchestrationError(RuntimeError):
@@ -1127,11 +1127,33 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
             "suggested_action": review.get("guidance", ""),
         }
         if valid_local_owner_request(request):
-            store.create_deviation(
-                plan.id, plan.project,
-                "Qwen requests one owner decision",
-                request,
+            rejected_decisions = set(
+                updated_context.get("rejected_owner_decisions", [])
             )
+            decision_key = owner_decision_key(request)
+            if decision_key and decision_key in rejected_decisions:
+                updated_context["next_guidance"] = (
+                    "The owner already rejected this exact decision. Do not ask "
+                    "again; choose a materially different implementation route "
+                    "inside existing authority or stop cleanly."
+                )
+                store.update_plan(
+                    plan.id,
+                    status="approved",
+                    attempts=0,
+                    context=updated_context,
+                )
+                store.event(
+                    plan.id,
+                    "project_rejected_owner_decision_not_reasked",
+                    decision_key,
+                )
+            else:
+                store.create_deviation(
+                    plan.id, plan.project,
+                    "Qwen requests one owner decision",
+                    request,
+                )
         else:
             updated_context["next_guidance"] = (
                 "Governance rejected the proposed boss escalation as internal or "
@@ -1269,9 +1291,17 @@ def reject_deviation(settings, store, source: Path, did: str) -> dict:
         return current_row
     restore_checkpoint(settings, source, current_row)
     context = dict(current_row.get("context", {}))
+    request = deviation.get("request") or {}
+    if request.get("type") == "manager_escalation":
+        rejected_decisions = list(context.get("rejected_owner_decisions", []))
+        decision_key = owner_decision_key(request)
+        if decision_key and decision_key not in rejected_decisions:
+            rejected_decisions.append(decision_key)
+        context["rejected_owner_decisions"] = rejected_decisions[-50:]
     context["next_guidance"] = (
-        "Owner rejected the requested deviation. Find an alternative that stays "
-        "strictly inside the original approved mutation lease."
+        "Owner rejected the requested deviation. Treat that exact decision as "
+        "settled for this plan and find an alternative strictly inside the "
+        "original approved mutation lease."
     )
     if not store.resume_from_deviation(
         current_row["id"], attempts=0, context=context
