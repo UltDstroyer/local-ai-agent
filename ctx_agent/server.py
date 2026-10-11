@@ -287,9 +287,15 @@ class Coordinator:
 
     @staticmethod
     def _public_deviations(items: list[dict]) -> list[dict]:
+        # Keep only non-sensitive routing metadata. The live CLI needs the
+        # owning plan/scope to surface the right pending decision while raw
+        # request payloads remain hidden until an explicit show operation.
         return [
             {
                 "id": item.get("id", ""),
+                "plan": item.get("plan", ""),
+                "project": item.get("project", ""),
+                "target": item.get("target", ""),
                 "status": item.get("status", ""),
                 "created": item.get("created"),
                 "updated": item.get("updated"),
