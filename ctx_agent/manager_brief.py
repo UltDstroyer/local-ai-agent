@@ -84,10 +84,16 @@ risk in plain language.
 Return JSON only:
 {{
   "summary": "1-2 short sentences",
+  "request": "one plain-English permission or decision, never JSON",
   "risk": "low|medium|high",
   "recommendation": "one short sentence",
   "decision": "one short approval/rejection question"
-}}"""
+}}
+
+The request field must be a normal sentence. Never put an object, dict, list,
+credential schema, or raw input_request structure in it. If the deviation
+contains an input_request, summarize only the permission to ask for that one
+human-only input; the actual prompt happens later after approval."""
     try:
         message = ask(
             settings,
@@ -110,10 +116,15 @@ Return JSON only:
         value = json.loads(str(message.get("content", "")))
         if not isinstance(value, dict):
             raise ValueError("manager brief was not an object")
-        concrete = str(value.get("request", "")).strip()
-        stored = str((deviation.get("request") or {}).get("boss_request", "")).strip()
+        raw_concrete = value.get("request", "")
+        concrete = raw_concrete.strip() if isinstance(raw_concrete, str) else ""
+        stored_value = (deviation.get("request") or {}).get("boss_request", "")
+        stored = stored_value.strip() if isinstance(stored_value, str) else ""
         if stored:
             concrete = stored
+        input_request = (deviation.get("request") or {}).get("input_request")
+        if isinstance(input_request, dict) and not concrete:
+            concrete = "Allow me to request one human-only input needed for this step."
         if not concrete:
             raise ValueError("manager brief omitted the concrete request")
         value["request"] = concrete
