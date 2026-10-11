@@ -11,6 +11,7 @@ from unittest.mock import patch
 from ctx_agent.cli import (
     _follow_approved_plan,
     _print_live_deviation,
+    _print_progress_report,
     _prompt_human_input,
     _show_pending_deviation,
     main as cli_main,
@@ -305,6 +306,36 @@ class LiveDeviationWatcherTests(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         follow.assert_not_called()
+
+
+class StructuredProgressReportTests(unittest.TestCase):
+    def test_live_report_shows_all_stage_states_cleanly(self):
+        progress = {
+            "phase": "executing",
+            "current_stage_index": 2,
+            "current_stage_name": "Configure nginx",
+            "stage_count": 4,
+            "percent_complete": 50,
+            "elapsed_seconds": 90,
+            "estimated_remaining_seconds": 180,
+            "stages": [
+                {"index": 1, "name": "Inspect", "status": "complete", "estimated_seconds": 30},
+                {"index": 2, "name": "Configure nginx", "status": "running", "estimated_seconds": 90},
+                {"index": 3, "name": "Verify tunnel", "status": "queued", "estimated_seconds": 60},
+                {"index": 4, "name": "Final verification", "status": "pending", "estimated_seconds": 60},
+            ],
+            "estimate_note": "Rough work-time estimate.",
+        }
+        output = io.StringIO()
+        _print_progress_report(progress, file=output)
+        text = output.getvalue()
+        self.assertIn("[Qwen manager] progress", text)
+        self.assertIn("phase: executing", text)
+        self.assertIn("[done] 1. Inspect", text)
+        self.assertIn("[active] 2. Configure nginx", text)
+        self.assertIn("[queued] 3. Verify tunnel", text)
+        self.assertIn("[pending] 4. Final verification", text)
+
 
 
 if __name__ == "__main__":
