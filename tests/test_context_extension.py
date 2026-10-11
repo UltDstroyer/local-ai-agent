@@ -275,5 +275,55 @@ class AdapterTests(unittest.TestCase):
         ])
 
 
+    def test_progress_wakes_latest_legacy_internal_cancel(self):
+        state = (
+            [],
+            [{
+                "id": "plan123",
+                "target": "pi",
+                "status": "cancelled",
+                "updated": 200,
+                "created": 100,
+            }],
+            [],
+            [],
+        )
+        recovered = {
+            "plan": {
+                "id": "plan123",
+                "target": "pi",
+                "status": "approved",
+            }
+        }
+        with patch.dict(os.environ, {
+            "CTX_CONTEXT": "",
+            "CTX_EXTENSION_API_VERSION": "1",
+        }):
+            with patch(
+                "ctx_agent.context_extension._global_state",
+                return_value=state,
+            ), patch(
+                "ctx_agent.context_extension.agent_cli.call",
+                return_value=recovered,
+            ) as direct, patch(
+                "ctx_agent.context_extension.agent_cli.main",
+                return_value=0,
+            ) as cli:
+                result = main(["progress"])
+        self.assertEqual(result, 0)
+        direct.assert_called_once_with(
+            "/run/ctx-agent/agent.sock",
+            {
+                "op": "remote_plan_retry_internal",
+                "target": "pi",
+                "id": "plan123",
+            },
+            timeout=30,
+        )
+        cli.assert_called_once_with([
+            "remote-plan-progress", "pi", "plan123"
+        ])
+
+
 if __name__ == "__main__":
     unittest.main()
