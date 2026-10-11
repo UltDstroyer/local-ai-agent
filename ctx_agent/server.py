@@ -408,8 +408,16 @@ class Coordinator:
             self.mode,
             owner_policy=self._load_owner_policy(),
         )
+        current_progress = plan_snapshot(
+            row,
+            store.events(row["id"]),
+            remote=remote,
+            mode=self.mode,
+            paused=self.paused,
+        )
         return {
             "report": report,
+            "progress": current_progress,
             "plan_ids": [item["id"] for item in lineage],
             "current_plan_id": row["id"],
         }
@@ -583,6 +591,12 @@ secret values or request secrets through chat; use the secure input flow.
             "updated": row.get("updated"),
             "result": row.get("result", ""),
             "has_internal_error": bool(row.get("error")),
+            "recovery_of_plan_id": str(
+                (row.get("context") or {}).get("recovery_of_plan_id", "")
+            ),
+            "recovery_delta": (
+                (row.get("context") or {}).get("recovery_delta") or None
+            ),
         }
         workspace = (
             self.settings.workspaces_dir / row["id"]
@@ -615,6 +629,12 @@ secret values or request secrets through chat; use the secure input flow.
             "updated": row.get("updated"),
             "result": row.get("result", ""),
             "has_internal_error": bool(row.get("error")),
+            "recovery_of_plan_id": str(
+                (row.get("context") or {}).get("recovery_of_plan_id", "")
+            ),
+            "recovery_delta": (
+                (row.get("context") or {}).get("recovery_delta") or None
+            ),
         }
         value["deviations"] = self._public_deviations(
             self.remote_store.list_deviations(plan=row["id"])
