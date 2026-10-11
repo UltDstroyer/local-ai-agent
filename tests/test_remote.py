@@ -841,3 +841,17 @@ class TypedActionFormatRecoveryTests(unittest.TestCase):
         self.assertFalse(_is_remote_action_format_error(
             "package installation is not approved"
         ))
+
+
+class RemoteWorkerEscalationBoundaryTests(unittest.TestCase):
+    def test_action_format_failure_is_not_owner_deviation(self):
+        source = (
+            Path(__file__).resolve().parents[1]
+            .joinpath("ctx_agent", "server.py")
+            .read_text()
+        )
+        self.assertIn(
+            'if failure["type"] in ("action_format", "codex_format")',
+            source,
+        )
+        self.assertIn("remote_internal_format_recovery", source)
