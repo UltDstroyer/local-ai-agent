@@ -45,7 +45,49 @@ _INTERNAL_DECISION_MARKERS = (
     "attempt budget",
     "file-write budget",
     "file write budget",
+    "another retry",
+    "retry this",
+    "retry the",
+    "try again",
+    "recovery cycle",
+    "debug",
+    "diagnostic",
+    "diagnose",
+    "inspect status",
+    "check status",
+    "service status",
+    "is running",
 )
+
+
+_TECHNICAL_AUTHORITY_MARKERS = (
+    "install ",
+    "download ",
+    "enable ",
+    "start service",
+    "restart service",
+    "restart the ",
+    "write ",
+    "edit ",
+    "modify ",
+    "delete ",
+    "remove ",
+    "sudo",
+    "remote command",
+    "firewall",
+    "open port",
+    "network access",
+    "external domain",
+    "configuration change",
+    "config file",
+)
+
+
+def _looks_like_technical_authority(text: object) -> bool:
+    if not isinstance(text, str):
+        return False
+    value = " ".join(text.lower().split())
+    return any(marker in value for marker in _TECHNICAL_AUTHORITY_MARKERS)
 
 
 _LOCAL_SECRET_INPUT_TERMS = (
@@ -230,7 +272,9 @@ def valid_remote_owner_request(request: object) -> bool:
 
     if kind == "manager_escalation":
         input_request = request.get("input_request")
-        return input_request is None or _valid_input_request(input_request)
+        if input_request is not None:
+            return _valid_input_request(input_request)
+        return not _looks_like_technical_authority(boss_request)
 
     # human_access has a concrete boss_request but no action payload.
     return True
@@ -254,4 +298,5 @@ def valid_local_owner_request(request: object) -> bool:
     return (
         not owner_request_is_internal(boss_request)
         and not _looks_like_local_secret_input(boss_request)
+        and not _looks_like_technical_authority(boss_request)
     )
