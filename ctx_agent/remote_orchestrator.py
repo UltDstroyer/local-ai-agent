@@ -1347,23 +1347,59 @@ def run_remote_plan_step(
             timeout=730,
         )
         if not review.get("ok"):
-            raise RemoteOrchestrationError("final Codex remote review failed")
-        verdict = _json_object(review.get("message", ""))
+            verdict = {
+                "ready": False,
+                "problems": [
+                    "Codex final review failed; rerun final technical verification."
+                ],
+                "summary": "Final technical review did not complete.",
+            }
+        else:
+            verdict = _json_object(review.get("message", ""))
         if verdict.get("ready") is not True:
             problems = verdict.get("problems", [])
-            remote_store.create_deviation(
-                plan.id,
-                plan.target,
-                "final remote verification found unresolved problems",
-                {
-                    "type": "final_verification",
-                    "problems": problems if isinstance(problems, list) else [],
-                    "suggested_action": (
-                        "Review the reported verification problems and approve "
-                        "a narrow retry if more remote work is appropriate."
-                    ),
-                },
+            context = dict(row.get("context", {}))
+            cycles = int(context.get("final_verification_recoveries", 0)) + 1
+            context["final_verification_recoveries"] = cycles
+            problem_text = (
+                "; ".join(str(x) for x in problems[:8])
+                if isinstance(problems, list)
+                else str(problems)
             )
+            context["next_guidance"] = (
+                "Final verification found technical problems. Qwen and Codex should "
+                "repair them inside existing authority before involving the owner: "
+                + problem_text
+            )[:3000]
+            if cycles <= 3 and plan.milestones:
+                remote_store.update_plan(
+                    plan.id,
+                    status="approved",
+                    current_milestone=max(0, len(plan.milestones) - 1),
+                    attempts=0,
+                    codex_thread="",
+                    context=context,
+                )
+                remote_store.event(
+                    plan.id,
+                    "remote_final_verification_rework",
+                    f"{cycles}: {problem_text}"[:1500],
+                )
+            else:
+                remote_store.update_plan(
+                    plan.id,
+                    status="cancelled",
+                    result=(
+                        "Final verification repeatedly failed without identifying "
+                        "a genuine owner decision."
+                    ),
+                    context=context,
+                )
+                remote_store.event(
+                    plan.id,
+                    "remote_final_verification_exhausted",
+                    problem_text[:1500],
+                )
             return
         remote_store.update_plan(
             plan.id,
