@@ -14,6 +14,7 @@ from ctx_agent.cli import (
     _print_progress_report,
     _prompt_human_input,
     _show_pending_deviation,
+    _wait_for_recovery_successor,
     main as cli_main,
 )
 from ctx_agent.manager_brief import manager_deviation_brief
@@ -335,6 +336,88 @@ class StructuredProgressReportTests(unittest.TestCase):
         self.assertIn("[active] 2. Configure nginx", text)
         self.assertIn("[queued] 3. Verify tunnel", text)
         self.assertIn("[pending] 4. Final verification", text)
+
+
+
+class RecoveryPlanningProgressTests(unittest.TestCase):
+    def test_recovery_handoff_explains_failure_then_shows_new_plan_progress(self):
+        calls = {"progress": 0, "list": 0}
+
+        failed = {
+            "id": "oldplan12345",
+            "target": "pi",
+            "status": "failed_internal",
+            "result": "nginx verification repeatedly failed",
+            "current_milestone": 1,
+            "plan": {
+                "milestones": [
+                    "Inspect server",
+                    "Repair nginx",
+                    "Verify tunnel",
+                ]
+            },
+            "context": {},
+        }
+        successor = {
+            "id": "newplan12345",
+            "target": "pi",
+            "status": "awaiting_approval",
+            "goal": "Failed plan ID: oldplan12345 recovery",
+            "current_milestone": 0,
+            "plan": {
+                "milestones": ["Reinspect", "Apply different repair"],
+                "remote_budget": {},
+            },
+            "context": {"recovery_of_plan_id": "oldplan12345"},
+        }
+
+        def fake_call(path, payload, timeout=900):
+            if payload["op"] == "remote_plan_list":
+                calls["list"] += 1
+                if calls["list"] == 1:
+                    return {"plans": [failed]}
+                return {"plans": [successor, failed]}
+            if payload["op"] == "remote_plan_progress":
+                calls["progress"] += 1
+                return {
+                    "progress": {
+                        "phase": "planning",
+                        "current_stage_index": 2,
+                        "current_stage_name": "Codex drafts plan",
+                        "stage_count": 4,
+                        "percent_complete": 25,
+                        "elapsed_seconds": 12,
+                        "estimated_remaining_seconds": 30,
+                        "planning_stages": [
+                            {"index": 1, "name": "Inspect target", "status": "complete", "estimated_seconds": 5},
+                            {"index": 2, "name": "Codex drafts plan", "status": "running", "estimated_seconds": 10},
+                            {"index": 3, "name": "Qwen narrows scope", "status": "pending", "estimated_seconds": 10},
+                            {"index": 4, "name": "Codex confirms contract", "status": "pending", "estimated_seconds": 10},
+                        ],
+                    }
+                }
+            raise AssertionError(payload)
+
+        output = io.StringIO()
+        with patch("ctx_agent.cli.call", side_effect=fake_call), patch(
+            "ctx_agent.cli.time.sleep", return_value=None
+        ), redirect_stderr(output), patch("sys.stdout", output):
+            result = _wait_for_recovery_successor(
+                "/tmp/fake.sock",
+                remote=True,
+                scope="pi",
+                failed_plan_id="oldplan12345",
+            )
+
+        text = output.getvalue()
+        self.assertEqual(result["id"], "newplan12345")
+        self.assertIn("[Qwen manager] A new plan is required", text)
+        self.assertIn("failed stage: Repair nginx", text)
+        self.assertIn("reason: nginx verification repeatedly failed", text)
+        self.assertIn("[Qwen manager] replacement plan progress", text)
+        self.assertIn("[done] 1. Inspect target", text)
+        self.assertIn("[active] 2. Codex drafts plan", text)
+        self.assertIn("Recovery plan ready for your decision", text)
 
 
 
