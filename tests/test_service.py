@@ -120,6 +120,18 @@ class TestCoordinator(unittest.TestCase):
             self.assertFalse(c.dispatch({"op": "resume"})["paused"])
             self.assertTrue(c.dispatch({"op": "cancel", "id": result["id"]})["cancelled"])
 
+    def test_only_one_plan_can_be_active_globally(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            c = Coordinator(Settings(root, root / "agent.sock", root / "projects"))
+            c.store.create_plan(
+                "demo",
+                "First task",
+                {"id": "abc123def456"},
+            )
+            with self.assertRaisesRegex(ValueError, "another plan is already active"):
+                c._require_idle_for_new_plan()
+
     def test_apply_requires_completed_job(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
