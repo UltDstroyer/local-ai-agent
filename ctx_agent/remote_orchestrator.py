@@ -1024,6 +1024,61 @@ def classify_remote_error(exc: Exception) -> dict:
     }
 
 
+def _auto_expand_execution_budget(
+    remote_store,
+    plan: RemotePlan,
+    context: dict,
+    *,
+    requested_actions: int | None = None,
+    requested_file_writes: int | None = None,
+) -> tuple[RemotePlan, dict]:
+    """Raise bookkeeping-only limits without expanding authority."""
+    raw = plan.to_dict()
+    budget = raw["remote_budget"]
+    original = dict(context.get("original_execution_budget") or {})
+    if not original:
+        original = {
+            "max_actions": int(budget["max_actions"]),
+            "max_file_writes": int(budget["max_file_writes"]),
+        }
+        context["original_execution_budget"] = dict(original)
+
+    action_cap = min(500, max(original["max_actions"] * 4, original["max_actions"] + 20))
+    write_cap = min(100, max(original["max_file_writes"] * 4, original["max_file_writes"] + 8))
+
+    changed = {}
+    if requested_actions is not None and requested_actions > int(budget["max_actions"]):
+        if requested_actions > action_cap:
+            raise RemoteOrchestrationError(
+                f"execution action budget needs {requested_actions}, above manager cap {action_cap}"
+            )
+        budget["max_actions"] = requested_actions
+        changed["max_actions"] = requested_actions
+
+    if (
+        requested_file_writes is not None
+        and requested_file_writes > int(budget["max_file_writes"])
+    ):
+        if requested_file_writes > write_cap:
+            raise RemoteOrchestrationError(
+                f"file-write budget needs {requested_file_writes}, above manager cap {write_cap}"
+            )
+        budget["max_file_writes"] = requested_file_writes
+        changed["max_file_writes"] = requested_file_writes
+
+    if not changed:
+        return plan, context
+
+    updated = RemotePlan.from_dict(raw, plan.target, plan.id)
+    remote_store.update_plan(plan.id, plan=updated.to_dict(), context=context)
+    remote_store.event(
+        plan.id,
+        "remote_execution_budget_expanded_by_manager",
+        json.dumps(changed),
+    )
+    return updated, context
+
+
 def _dependency_key(action: dict) -> str | None:
     op = action.get("op")
     if op == "package_install":
@@ -1317,17 +1372,31 @@ def run_remote_plan_step(
     action_count = int(context.get("action_count", 0))
     file_write_count = int(context.get("file_write_count", 0))
     if action_count + len(actions) > plan.budget.max_actions:
-        remote_store.create_deviation(
-            plan.id,
-            plan.target,
-            "remote action budget would be exceeded",
-            {
-                "type": "remote_budget",
-                "requested_max_actions": action_count + len(actions),
-                "current_budget": plan.budget.to_dict(),
-            },
-        )
-        return
+        try:
+            plan, context = _auto_expand_execution_budget(
+                remote_store,
+                plan,
+                context,
+                requested_actions=action_count + len(actions),
+            )
+        except RemoteOrchestrationError as exc:
+            remote_store.create_deviation(
+                plan.id,
+                plan.target,
+                "Qwen reached the bounded execution-budget ceiling",
+                {
+                    "type": "execution_budget_ceiling",
+                    "reason": str(exc),
+                    "boss_request": (
+                        "Allow a larger execution-count ceiling for this plan."
+                    ),
+                    "risk": "low",
+                    "suggested_action": (
+                        "Increase only the bookkeeping ceiling; do not expand capabilities."
+                    ),
+                },
+            )
+            return
 
     validated = []
     approved_dependencies = set(context.get("approved_dependencies", []))
@@ -1427,17 +1496,31 @@ def run_remote_plan_step(
         validated.append(checked)
 
     if file_write_count > plan.budget.max_file_writes:
-        remote_store.create_deviation(
-            plan.id,
-            plan.target,
-            "remote file-write budget would be exceeded",
-            {
-                "type": "remote_budget",
-                "requested_max_file_writes": file_write_count,
-                "current_budget": plan.budget.to_dict(),
-            },
-        )
-        return
+        try:
+            plan, context = _auto_expand_execution_budget(
+                remote_store,
+                plan,
+                context,
+                requested_file_writes=file_write_count,
+            )
+        except RemoteOrchestrationError as exc:
+            remote_store.create_deviation(
+                plan.id,
+                plan.target,
+                "Qwen reached the bounded file-write ceiling",
+                {
+                    "type": "execution_budget_ceiling",
+                    "reason": str(exc),
+                    "boss_request": (
+                        "Allow a larger file-write count ceiling for this plan."
+                    ),
+                    "risk": "low",
+                    "suggested_action": (
+                        "Increase only the bookkeeping ceiling; do not expand paths or capabilities."
+                    ),
+                },
+            )
+            return
 
     # The owner-approved remote contract plus deterministic validation is the
     # execution gate. The local model manages plan scope and milestone outcomes,
