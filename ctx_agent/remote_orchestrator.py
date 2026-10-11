@@ -2931,6 +2931,37 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
         raise RemoteOrchestrationError("remote deviation has no plan")
     plan = RemotePlan.from_dict(row["plan"], row["target"], row["id"])
     request = deviation["request"]
+    request_type = request.get("type")
+    action_types = {
+        "remote_scope",
+        "dependency_install",
+        "service_activation",
+        "critical_remote_exec",
+    }
+    resume_only_types = {
+        "manager_escalation",
+        "human_access",
+    }
+    if request_type not in action_types | resume_only_types:
+        raise RemoteOrchestrationError(
+            "this deviation type is obsolete or unsupported; reject it and let "
+            "Qwen/Codex re-evaluate under the current policy"
+        )
+    if request_type in action_types:
+        proposed_action = request.get("proposed_action")
+        if not isinstance(proposed_action, dict) or not proposed_action:
+            raise RemoteOrchestrationError(
+                "action-bearing deviation is missing its exact proposed action"
+            )
+        if request_type == "critical_remote_exec":
+            critical_key = str(request.get("critical_key", "")).strip()
+            if (
+                not critical_key
+                or critical_key != _critical_exec_key(proposed_action)
+            ):
+                raise RemoteOrchestrationError(
+                    "critical deviation does not match its exact action identity"
+                )
 
     if not remote_store.resolve_deviation(did, True):
         raise RemoteOrchestrationError("remote deviation changed concurrently")
@@ -2942,38 +2973,8 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
         current_row["plan"], current_row["target"], current_row["id"]
     )
 
-    if request.get("type") in (
-        "remote_scope",
-        "dependency_install",
-        "service_activation",
-        "critical_remote_exec",
-    ):
-        pass
-    elif request.get("type") == "manual_required":
-        pass
-    elif request.get("type") == "remote_budget":
-        raw = plan.to_dict()
-        budget = raw["remote_budget"]
-        if "requested_max_actions" in request:
-            budget["max_actions"] = max(
-                budget["max_actions"],
-                int(request["requested_max_actions"]),
-            )
-        if "requested_max_file_writes" in request:
-            budget["max_file_writes"] = max(
-                budget["max_file_writes"],
-                int(request["requested_max_file_writes"]),
-            )
-        plan = RemotePlan.from_dict(raw, plan.target, plan.id)
-        remote_store.update_plan(plan.id, plan=plan.to_dict())
-
     context = dict(current_row.get("context", {}))
-    if request.get("type") in (
-        "remote_scope",
-        "dependency_install",
-        "service_activation",
-        "critical_remote_exec",
-    ):
+    if request_type in action_types:
         proposed_action = request.get("proposed_action")
         if isinstance(proposed_action, dict) and proposed_action:
             action_leases = list(context.get("approved_action_leases", []))
@@ -2981,7 +2982,7 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
             if lease_key not in action_leases:
                 action_leases.append(lease_key)
             context["approved_action_leases"] = action_leases[-50:]
-    if request.get("type") == "critical_remote_exec":
+    if request_type == "critical_remote_exec":
         approved_critical_execs = list(
             context.get("approved_critical_execs", [])
         )
@@ -2989,18 +2990,12 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
         if critical_key and critical_key not in approved_critical_execs:
             approved_critical_execs.append(critical_key)
         context["approved_critical_execs"] = approved_critical_execs[-30:]
-    if request.get("type") == "manual_required":
-        context["next_guidance"] = (
-            "Owner handled or accepted the manual dependency. Re-inspect the "
-            "target and continue without retrying the unsupported broker action."
+    context["next_guidance"] = str(
+        request.get(
+            "suggested_action",
+            "Owner approved the exact requested remote decision. Continue narrowly.",
         )
-    else:
-        context["next_guidance"] = str(
-            request.get(
-                "suggested_action",
-                "Owner approved the exact requested remote deviation. Continue narrowly.",
-            )
-        )[:3000]
+    )[:3000]
     remote_store.update_plan(
         plan.id, status="approved", attempts=0, context=context
     )
