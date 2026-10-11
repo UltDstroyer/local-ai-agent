@@ -749,6 +749,11 @@ class Coordinator:
                             self.mode,
                             inputs=dict(self.remote_inputs.get(row["id"], {})),
                         )
+                    current = self.remote_store.get_plan(row["id"])
+                    if current and current.get("status") in (
+                        "completed", "cancelled", "rejected"
+                    ):
+                        self.remote_inputs.pop(row["id"], None)
                 except Exception as exc:
                     current = self.remote_store.get_plan(row["id"])
                     if current and current["status"] == "running":
