@@ -495,6 +495,7 @@ class Handler(socketserver.StreamRequestHandler):
         raw = self.rfile.readline(MAX_REQUEST + 1)
         if len(raw) > MAX_REQUEST:
             return
+        request = {}
         try:
             request = json.loads(raw)
             if not isinstance(request, dict):
