@@ -17,6 +17,7 @@ from ctx_agent.remote_orchestrator import (
     _json_object,
     _remote_context_dir,
     _validated_remote_plan,
+    summarize_remote_deviation,
 )
 from ctx_agent.remote_store import RemoteStore
 from ctx_agent.ssh_bridge import SSHBridge, SSHBridgeError, _ssh_base
@@ -178,6 +179,42 @@ class RemotePlanValidationRepairTests(unittest.TestCase):
         self.assertEqual(plan.budget.allowed_domains, ("pkg.cloudflare.com",))
         self.assertTrue(plan.budget.allow_remote_admin)
         self.assertEqual(mocked.call_count, 1)
+
+
+class RemoteDeviationSummaryTests(unittest.TestCase):
+    def test_qwen_summary_is_concise_and_hides_raw_logs(self):
+        deviation = {
+            "id": "52eb43d5925f",
+            "reason": "remote milestone repeatedly failed after partial execution",
+            "request": {
+                "type": "stalled",
+                "milestone": "Recover disk space",
+                "suggested_action": "Retry verification safely",
+                "results": [
+                    {
+                        "action": {"op": "remote_exec", "command": "very long command"},
+                        "ok": False,
+                        "returncode": 1,
+                        "output": "dpkg-query: no packages found matching sonic-pi",
+                    }
+                ],
+            },
+        }
+        with patch(
+            "ctx_agent.remote_orchestrator._ask_json_object",
+            return_value={
+                "summary": "Cleanup succeeded; verification failed because the removed package was absent.",
+                "recommendation": "Retry with absence treated as success.",
+                "risk": "low",
+            },
+        ) as mocked:
+            value = summarize_remote_deviation(
+                SimpleNamespace(), deviation, "balanced"
+            )
+        self.assertEqual(value["risk"], "low")
+        self.assertIn("Cleanup succeeded", value["summary"])
+        prompt = mocked.call_args.args[1][1]["content"]
+        self.assertNotIn("very long command", prompt)
 
 
 class RemoteJSONTests(unittest.TestCase):
