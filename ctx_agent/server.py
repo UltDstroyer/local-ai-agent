@@ -464,8 +464,19 @@ class Coordinator:
                     self.remote_inputs.pop(pid, None)
                 current = self.remote_store.get_plan(pid)
                 if current:
+                    current_context = dict(current.get("context", {}))
+                    current_available = list(
+                        current_context.get("available_inputs", [])
+                    )
+                    previous_available = set(
+                        previous_context.get("available_inputs", [])
+                    )
+                    if key not in previous_available:
+                        current_context["available_inputs"] = [
+                            item for item in current_available if item != key
+                        ]
                     self.remote_store.update_plan(
-                        pid, context=previous_context
+                        pid, context=current_context
                     )
                 raise
             self.remote_store.event(pid, "remote_human_input_received", key)
