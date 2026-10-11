@@ -15,6 +15,7 @@ from ctx_agent.remote import (
 from ctx_agent.remote_orchestrator import (
     _ask_json_object,
     _json_object,
+    _remote_actions_error,
     _remote_context_dir,
     _validated_remote_plan,
 )
@@ -86,6 +87,26 @@ class RemoteContractTests(unittest.TestCase):
                 "op": "service",
                 "service": "nginx",
                 "action": "restart",
+            }, b)
+
+    def test_service_scope_accepts_service_suffix_alias(self):
+        b = RemoteBudget.from_dict(budget())
+        action = validate_remote_action({
+            "op": "check",
+            "check": "journal_tail",
+            "service": "jellyfin.service",
+        }, b)
+        self.assertEqual(action["service"], "jellyfin.service")
+
+    def test_service_scope_still_rejects_unapproved_units(self):
+        b = RemoteBudget.from_dict(budget())
+        with self.assertRaisesRegex(
+            RemoteContractError, "unapproved service: ssh.service"
+        ):
+            validate_remote_action({
+                "op": "check",
+                "check": "systemctl_is_active",
+                "service": "ssh.service",
             }, b)
 
     def test_no_arbitrary_shell_action_exists(self):
@@ -191,6 +212,17 @@ class RemoteJSONTests(unittest.TestCase):
         with self.assertRaises(RemoteContractError):
             _json_object('{"goal": "media",}')
 
+
+
+class RemoteActionProposalTests(unittest.TestCase):
+    def test_action_shape_error_reports_exact_problem(self):
+        self.assertEqual(
+            _remote_actions_error({"op": "check"}),
+            "Codex proposal field 'actions' must be a list; got dict",
+        )
+        self.assertIn("at least one", _remote_actions_error([]))
+        self.assertIn("21 remote actions", _remote_actions_error([{}] * 21))
+        self.assertIsNone(_remote_actions_error([{"op": "check"}]))
 
 
 class RemoteJSONRetryTests(unittest.TestCase):
