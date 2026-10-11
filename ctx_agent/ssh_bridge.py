@@ -404,6 +404,21 @@ def _rollback_records(
     return result
 
 
+def _redact_result_outputs(result: dict, inputs: dict[str, str]) -> dict:
+    if not isinstance(result, dict) or not inputs:
+        return result
+    redacted = dict(result)
+    secrets = [value for value in inputs.values() if isinstance(value, str) and value]
+    for key in ("output", "stdout", "stderr", "error", "message"):
+        value = redacted.get(key)
+        if not isinstance(value, str):
+            continue
+        for secret in secrets:
+            value = value.replace(secret, "[REDACTED]")
+        redacted[key] = value
+    return redacted
+
+
 class SSHBridge:
     def dispatch(self, request: dict) -> dict:
         op = request.get("op")
@@ -433,32 +448,34 @@ class SSHBridge:
             _resolve_action_inputs(raw_action, inputs), budget
         )
         if action["op"] == "read_file":
-            return _read_file(target, budget, action)
-        if action["op"] == "write_file":
-            return _write_file(
+            result = _read_file(target, budget, action)
+        elif action["op"] == "write_file":
+            result = _write_file(
                 target,
                 budget,
                 action,
                 request.get("plan", ""),
                 request.get("milestone", -1),
             )
-        if action["op"] == "ensure_dir":
-            return _ensure_dir(
+        elif action["op"] == "ensure_dir":
+            result = _ensure_dir(
                 target,
                 budget,
                 action,
                 request.get("plan", ""),
                 request.get("milestone", -1),
             )
-        if action["op"] == "package_install":
-            return _package_install(target, budget, action)
-        if action["op"] == "service":
-            return _service(target, budget, action)
-        if action["op"] == "check":
-            return _check(target, budget, action)
-        if action["op"] == "remote_exec":
-            return _remote_exec(target, budget, action)
-        raise SSHBridgeError("unreachable remote action")
+        elif action["op"] == "package_install":
+            result = _package_install(target, budget, action)
+        elif action["op"] == "service":
+            result = _service(target, budget, action)
+        elif action["op"] == "check":
+            result = _check(target, budget, action)
+        elif action["op"] == "remote_exec":
+            result = _remote_exec(target, budget, action)
+        else:
+            raise SSHBridgeError("unreachable remote action")
+        return _redact_result_outputs(result, inputs)
 
 
 class Handler(socketserver.StreamRequestHandler):
