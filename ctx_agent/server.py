@@ -419,7 +419,8 @@ class Coordinator:
             raise ValueError("Manager chat message must be 1 to 4000 characters")
         message = message.strip()
         store = self.remote_store if remote else self.store
-        context = dict(row.get("context", {}))
+        context = ensure_management_contract(row.get("context", {}))
+        context["owner_policy_snapshot"] = self._load_owner_policy()
         conversation = [
             item for item in context.get("manager_conversation", [])
             if isinstance(item, dict)
@@ -742,6 +743,10 @@ secret values or request secrets through chat; use the secure input flow.
                 )
                 raise
             self._planning_finish("remote_plan", target_name, "finished")
+            context = ensure_management_contract(row.get("context", {}))
+            context["owner_policy_snapshot"] = self._load_owner_policy()
+            self.remote_store.update_plan(row["id"], context=context)
+            row = self.remote_store.get_plan(row["id"])
             return {"plan": self._remote_plan_view(row)}
         if op == "remote_plan_list":
             return {
@@ -1037,6 +1042,10 @@ secret values or request secrets through chat; use the secure input flow.
                 )
                 raise
             self._planning_finish("project_plan", project, "finished")
+            context = ensure_management_contract(row.get("context", {}))
+            context["owner_policy_snapshot"] = self._load_owner_policy()
+            self.store.update_plan(row["id"], context=context)
+            row = self.store.get_plan(row["id"])
             return {"plan": self._plan_view(row)}
         if op == "plan_list":
             project = data.get("project") or None
@@ -1333,11 +1342,26 @@ secret values or request secrets through chat; use the secure input flow.
             )
             raise
         self._planning_finish("remote_plan", failed["target"], "finished")
-        successor_context = dict(row.get("context", {}))
+        successor_context = ensure_management_contract(row.get("context", {}))
+        failure_text = (
+            str(postmortem.get("failure", ""))
+            if isinstance(postmortem, dict)
+            else str(postmortem)
+        )
+        delta = recovery_delta(
+            failed_stage=failed_stage,
+            completed=completed,
+            old_remaining=milestones[max(0, index):],
+            new_milestones=list((row.get("plan") or {}).get("milestones", [])),
+            failure=failure_text,
+        )
         successor_context.update({
             "recovery_of_plan_id": failed["id"],
             "recovery_postmortem": postmortem,
             "completed_prior_milestones": completed,
+            "recovery_delta": delta,
+            "owner_policy_snapshot": self._load_owner_policy(),
+            "owner_guidance": list(context.get("owner_guidance") or [])[-12:],
         })
         self.remote_store.update_plan(
             row["id"],
@@ -1345,6 +1369,7 @@ secret values or request secrets through chat; use the secure input flow.
         )
         context["recovery_plan_id"] = row["id"]
         context["recovery_plan_required"] = False
+        context["recovery_delta"] = delta
         self.remote_store.update_plan(
             failed["id"],
             context=context,
@@ -1409,15 +1434,31 @@ secret values or request secrets through chat; use the secure input flow.
             )
             raise
         self._planning_finish("project_plan", project, "finished")
-        successor_context = dict(row.get("context", {}))
+        successor_context = ensure_management_contract(row.get("context", {}))
+        failure_text = (
+            str(postmortem.get("failure", ""))
+            if isinstance(postmortem, dict)
+            else str(postmortem)
+        )
+        delta = recovery_delta(
+            failed_stage=failed_stage,
+            completed=completed,
+            old_remaining=milestones[max(0, index):],
+            new_milestones=list((row.get("plan") or {}).get("milestones", [])),
+            failure=failure_text,
+        )
         successor_context.update({
             "recovery_of_plan_id": failed["id"],
             "recovery_postmortem": postmortem,
             "completed_prior_milestones": completed,
+            "recovery_delta": delta,
+            "owner_policy_snapshot": self._load_owner_policy(),
+            "owner_guidance": list(context.get("owner_guidance") or [])[-12:],
         })
         self.store.update_plan(row["id"], context=successor_context)
         context["recovery_plan_id"] = row["id"]
         context["recovery_plan_required"] = False
+        context["recovery_delta"] = delta
         self.store.update_plan(failed["id"], context=context)
         self.store.event(failed["id"], "recovery_plan_proposed", row["id"])
         return self.store.get_plan(row["id"])
