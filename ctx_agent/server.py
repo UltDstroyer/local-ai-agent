@@ -16,6 +16,7 @@ from .contracts import ContractError, Plan, analyze_changes, contract_violations
 from .orchestrator import (
     OrchestrationError,
     approve_deviation,
+    classify_project_error,
     create_negotiated_plan,
     ensure_workspace,
     reject_deviation,
@@ -25,6 +26,7 @@ from .remote import RemoteContractError, RemoteTarget
 from .remote_orchestrator import (
     RemoteOrchestrationError,
     approve_remote_deviation,
+    classify_remote_error,
     create_remote_plan,
     inspect_target,
     reject_remote_deviation,
@@ -699,18 +701,12 @@ class Coordinator:
                 except Exception as exc:
                     current = self.remote_store.get_plan(row["id"])
                     if current and current["status"] == "running":
+                        failure = classify_remote_error(exc)
                         self.remote_store.create_deviation(
                             row["id"],
                             row["target"],
-                            "Remote autonomous step stopped by a system/tool error",
-                            {
-                                "type": "system_error",
-                                "error": str(exc)[:4000],
-                                "suggested_action": (
-                                    "Check SSH/Codex bridges and remote connectivity, "
-                                    "then approve to retry."
-                                ),
-                            },
+                            "Remote autonomous step stopped: " + failure["type"],
+                            failure,
                         )
             except Exception:
                 self.shutdown.wait(1)
@@ -736,19 +732,12 @@ class Coordinator:
                 except Exception as exc:
                     current = self.store.get_plan(row["id"])
                     if current and current["status"] == "running":
-                        request = {
-                            "type": "system_error",
-                            "error": str(exc)[:4000],
-                            "suggested_action": (
-                                "Check Codex bridge/authentication or service logs, "
-                                "then approve to retry."
-                            ),
-                        }
+                        failure = classify_project_error(exc)
                         self.store.create_deviation(
                             row["id"],
                             row["project"],
-                            "Autonomous step stopped by a system/tool error",
-                            request,
+                            "Autonomous step stopped: " + failure["type"],
+                            failure,
                         )
             except Exception:
                 self.shutdown.wait(1)

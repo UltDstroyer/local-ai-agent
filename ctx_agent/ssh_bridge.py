@@ -133,6 +133,12 @@ for s in jellyfin nginx cloudflared caddy docker; do
   printf '%s: ' "$s"
   systemctl is-active "$s" 2>/dev/null || true
 done
+printf '%s\n' '=== discovered-services ==='
+systemctl list-unit-files --type=service --no-legend --no-pager 2>/dev/null \
+  | awk '{print $1}' | sed -n '1,300p'
+printf '%s\n' '=== discovered-running-services ==='
+systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null \
+  | awk '{print $1}' | sed -n '1,200p'
 printf '%s\n' '=== common-commands ==='
 for c in jellyfin nginx cloudflared curl apt-get dnf pacman podman docker; do
   if command -v "$c" >/dev/null 2>&1; then

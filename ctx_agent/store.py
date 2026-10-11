@@ -53,14 +53,41 @@ class Store:
             self.db.executescript(SCHEMA)
             # Ordinary jobs are not retried blindly. Approved project plans are
             # durable workflows, so a daemon restart makes them resumable.
+            now = time.time()
             self.db.execute(
                 "UPDATE jobs SET status='interrupted', updated=? WHERE status='running'",
-                (time.time(),),
+                (now,),
             )
+            interrupted = [
+                row["id"] for row in self.db.execute(
+                    "SELECT id FROM plans WHERE status='running'"
+                ).fetchall()
+            ]
             self.db.execute(
                 "UPDATE plans SET status='approved', updated=? WHERE status='running'",
-                (time.time(),),
+                (now,),
             )
+            for pid in interrupted:
+                row = self.db.execute(
+                    "SELECT context_json FROM plans WHERE id=?", (pid,)
+                ).fetchone()
+                context = json.loads(row["context_json"]) if row else {}
+                context["next_guidance"] = (
+                    "The coordinator restarted mid-milestone. Re-inspect the "
+                    "workspace and tests before continuing; do not assume the "
+                    "previous Codex turn completed."
+                )
+                self.db.execute(
+                    "UPDATE plans SET context_json=?,updated=? WHERE id=?",
+                    (json.dumps(context), now, pid),
+                )
+                self.db.execute(
+                    "INSERT INTO events(job,at,event,details) VALUES (?,?,?,?)",
+                    (
+                        pid, now, "plan_recovered_after_restart",
+                        "Interrupted running lease was safely re-queued.",
+                    ),
+                )
 
     def event(self, job, kind, details=""):
         with self.lock, self.db:
@@ -286,6 +313,19 @@ class Store:
             )
         self.event(plan, "deviation_requested", did + ": " + reason[:1000])
         return did
+
+    def pending_deviation(self, plan: str):
+        with self.lock:
+            row = self.db.execute(
+                "SELECT * FROM deviations "
+                "WHERE plan=? AND status='pending' ORDER BY created DESC LIMIT 1",
+                (plan,),
+            ).fetchone()
+        if not row:
+            return None
+        value = dict(row)
+        value["request"] = json.loads(value.pop("request_json"))
+        return value
 
     def get_deviation(self, did: str):
         with self.lock:

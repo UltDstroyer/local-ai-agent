@@ -149,6 +149,85 @@ def _call_with_progress(path, payload, progress_payload, timeout):
     return result["value"]
 
 
+def _print_live_deviation(deviation):
+    request = deviation.get("request") or {}
+    print("", file=sys.stderr)
+    print("[ctx-agent] DEVIATION REQUIRES OWNER INPUT", file=sys.stderr, flush=True)
+    print("  id:", deviation.get("id", ""), file=sys.stderr)
+    print("  reason:", deviation.get("reason", ""), file=sys.stderr)
+    if request.get("risk"):
+        print("  risk:", request["risk"], file=sys.stderr)
+    manager = request.get("manager_review") or {}
+    if manager.get("reason"):
+        print("  manager:", manager["reason"], file=sys.stderr)
+    if request.get("error"):
+        print("  error:", request["error"], file=sys.stderr)
+    if request.get("suggested_action"):
+        print("  recommendation:", request["suggested_action"], file=sys.stderr)
+    print(
+        "  action: ctx agent "
+        + ("remote-deviation" if deviation.get("target") else "deviation")
+        + " approve|reject "
+        + str(deviation.get("id", "")),
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _follow_approved_plan(path, plan, *, remote):
+    pid = plan.get("id", "")
+    scope = plan.get("target" if remote else "project", "")
+    if not pid or not scope:
+        return
+    last = None
+    while True:
+        progress_payload = {
+            "op": "remote_plan_progress" if remote else "plan_progress",
+            "target" if remote else "project": scope,
+            "id": pid,
+        }
+        snapshot = call(path, progress_payload, timeout=15)["progress"]
+        key = (
+            snapshot.get("phase"),
+            snapshot.get("current_stage_index"),
+            snapshot.get("percent_complete"),
+            (snapshot.get("current_stage_elapsed_seconds") or 0) // 5,
+        )
+        if key != last:
+            print(_progress_line(snapshot), file=sys.stderr, flush=True)
+            last = key
+        phase = snapshot.get("phase")
+        if phase == "awaiting_deviation":
+            deviations = call(
+                path,
+                {
+                    "op": "remote_deviation_list" if remote else "deviation_list",
+                    "target" if remote else "project": scope,
+                },
+                timeout=15,
+            )["deviations"]
+            pending = next(
+                (
+                    item for item in deviations
+                    if item.get("plan") == pid and item.get("status") == "pending"
+                ),
+                None,
+            )
+            if pending:
+                _print_live_deviation(pending)
+            return
+        if phase in (
+            "completed",
+            "cancelled",
+            "rejected",
+            "ready_for_owner_review",
+            "waiting_for_maximum_mode",
+            "paused",
+        ):
+            return
+        time.sleep(1.0)
+
+
 def _add_project_and_optional_id(parser):
     parser.add_argument("project")
     parser.add_argument("id", nargs="?")
@@ -290,6 +369,16 @@ def main(argv=None):
                 )
             else:
                 result = call(args.socket, data, timeout=timeout)
+
+        if args.action in (
+            "plan-approve",
+            "remote-plan-approve",
+            "deviation-approve",
+            "remote-deviation-approve",
+        ) and isinstance(result.get("plan"), dict):
+            plan = result["plan"]
+            remote = args.action.startswith("remote-")
+            _follow_approved_plan(args.socket, plan, remote=remote)
 
         if args.action in ("plan-progress", "remote-plan-progress"):
             _print_progress_report(result["progress"])

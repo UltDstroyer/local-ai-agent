@@ -99,6 +99,41 @@ class TestStore(unittest.TestCase):
             other = Store(path)
             self.assertEqual(other.get(a)["status"], "interrupted")
 
+    def test_running_plan_recovers_with_reinspection_guidance(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "db.sqlite3"
+            store = Store(path)
+            from ctx_agent.contracts import Plan
+            raw = {
+                "goal": "Change one file",
+                "milestones": ["Edit"],
+                "read_scope": ["**"],
+                "write_scope": ["main.py"],
+                "verification": ["works"],
+                "risks": [],
+                "assumptions": [],
+                "mutation_budget": {
+                    "max_files_changed": 1,
+                    "max_lines_changed": 20,
+                    "allow_new_files": False,
+                    "allow_file_deletion": False,
+                    "allow_dependency_changes": False,
+                    "allow_config_changes": False,
+                    "allow_network": False,
+                    "max_attempts_per_milestone": 3,
+                },
+            }
+            plan = Plan.from_dict(raw, "demo")
+            store.create_plan("demo", plan.goal, plan.to_dict())
+            store.approve_plan(plan.id)
+            self.assertEqual(store.next_plan()["status"], "running")
+            store.db.close()
+
+            recovered = Store(path)
+            row = recovered.get_plan(plan.id)
+            self.assertEqual(row["status"], "approved")
+            self.assertIn("restarted", row["context"]["next_guidance"])
+
     def test_cancel(self):
         with tempfile.TemporaryDirectory() as td:
             store = Store(Path(td) / "db")

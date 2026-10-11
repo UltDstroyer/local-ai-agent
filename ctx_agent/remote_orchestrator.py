@@ -564,6 +564,141 @@ def _remote_actions_error(actions: object) -> str | None:
     return None
 
 
+HIGH_RISK_REMOTE_PATHS = (
+    "/etc/ssh",
+    "/etc/sudoers",
+    "/etc/passwd",
+    "/etc/shadow",
+    "/boot",
+    "/etc/fstab",
+    "/etc/systemd/network",
+    "/etc/NetworkManager",
+)
+
+
+def _scope_risk(action: object) -> str:
+    if not isinstance(action, dict):
+        return "high"
+    op = action.get("op")
+    if op == "remote_exec":
+        return "high"
+    path = str(action.get("path", ""))
+    if path and any(
+        path == prefix or path.startswith(prefix + "/")
+        for prefix in HIGH_RISK_REMOTE_PATHS
+    ):
+        return "high"
+    if op in ("write_file", "ensure_dir", "package_install"):
+        return "medium"
+    if op == "service" and action.get("action") not in ("", "status"):
+        return "medium"
+    if op == "check" and action.get("check") in ("http_get", "http_head"):
+        return "medium"
+    return "low"
+
+
+def _manager_scope_review(
+    settings,
+    plan: RemotePlan,
+    milestone: str,
+    action: object,
+    reason: str,
+    inspection: str,
+    mode: str,
+) -> dict:
+    risk = _scope_risk(action)
+    if risk == "high":
+        return {
+            "approve": False,
+            "escalate": True,
+            "risk": risk,
+            "reason": "high-trust scope expansion requires owner approval",
+        }
+    prompt = f"""You are Qwen, the local manager for an autonomous Codex engineer.
+Codex requested a small expansion to an owner-approved SSH contract.
+
+Goal: {plan.goal}
+Milestone: {milestone}
+Current budget: {json.dumps(plan.budget.to_dict())}
+Requested action: {json.dumps(action)}
+Validator reason: {reason}
+Risk tier: {risk}
+Fresh inspection: {inspection[:10000]}
+
+Decide whether this is a reasonable, minimal, on-task expansion that can be
+approved without interrupting the owner. You may approve low/medium-risk typed
+scope expansions only. Never approve arbitrary remote_exec, credential access,
+SSH access changes, boot/disk/network lockout changes, or destructive unrelated
+work. Escalate anything ambiguous.
+
+Return JSON only:
+{{
+  "approve": true,
+  "escalate": false,
+  "reason": "short reason"
+}}"""
+    try:
+        value = _ask_json_object(
+            settings,
+            [
+                {"role": "system", "content": "Return strict JSON only."},
+                {"role": "user", "content": prompt},
+            ],
+            "balanced" if mode == "quiet" else mode,
+            num_predict=768,
+            num_ctx=4096,
+        )
+        approved = value.get("approve") is True and value.get("escalate") is not True
+        return {
+            "approve": approved,
+            "escalate": not approved,
+            "risk": risk,
+            "reason": str(value.get("reason", ""))[:2000],
+        }
+    except Exception as exc:
+        return {
+            "approve": False,
+            "escalate": True,
+            "risk": risk,
+            "reason": "manager scope review failed: " + str(exc)[:1000],
+        }
+
+
+def classify_remote_error(exc: Exception) -> dict:
+    text = str(exc)
+    lower = text.lower()
+    if isinstance(exc, RemoteContractError):
+        kind = "policy_scope"
+        action = "Review the exact contract violation or requested scope expansion."
+    elif isinstance(exc, SSHBridgeError) or "ssh " in lower:
+        if "timed out" in lower or "timeout" in lower or "exceeded" in lower:
+            kind = "timeout"
+            action = "Retry after checking target responsiveness; do not change scope."
+        elif "permission denied" in lower or "authentication" in lower:
+            kind = "credentials"
+            action = "Verify SSH authentication/permissions for the existing target."
+        else:
+            kind = "ssh_transport"
+            action = "Verify the SSH bridge and target transport, then retry."
+    elif "codex" in lower and ("json" in lower or "proposal" in lower):
+        kind = "codex_format"
+        action = "Retry Codex with the exact formatting correction."
+    elif "codex" in lower:
+        kind = "codex_worker"
+        action = "Retry the same Codex thread with the returned failure details."
+    elif "timeout" in lower or "timed out" in lower or "exceeded" in lower:
+        kind = "timeout"
+        action = "Retry the failed step after checking target responsiveness."
+    else:
+        kind = "remote_command"
+        action = "Inspect the exact remote failure and retry the smallest correction."
+    return {
+        "type": kind,
+        "error": text[:4000],
+        "suggested_action": action,
+    }
+
+
 def _amend_budget_for_action(plan: RemotePlan, action: dict) -> RemotePlan:
     raw = plan.to_dict()
     budget = raw["remote_budget"]
@@ -788,19 +923,73 @@ def run_remote_plan_step(settings, remote_store, row: dict, mode: str):
         except RemoteContractError as exc:
             reason = str(exc)
             if reason.startswith("unsupported remote action"):
-                request = {
-                    "type": "manual_required",
-                    "reason": reason,
-                    "proposed_action": action if isinstance(action, dict) else {},
-                    "suggested_action": (
-                        "This operation is intentionally unavailable through the "
-                        "SSH broker. Perform the required step manually if you "
-                        "want it, then approve this deviation to re-inspect and "
-                        "continue, or reject it to make Codex find an alternative."
-                    ),
-                }
-            else:
-                request = action_deviation(plan, action, reason)
+                remote_store.create_deviation(
+                    plan.id,
+                    plan.target,
+                    reason,
+                    {
+                        "type": "manual_required",
+                        "reason": reason,
+                        "proposed_action": action if isinstance(action, dict) else {},
+                        "suggested_action": (
+                            "The broker intentionally does not support this action. "
+                            "Owner input is required or Codex must choose an alternative."
+                        ),
+                    },
+                )
+                return
+
+            manager = _manager_scope_review(
+                settings,
+                plan,
+                plan.milestones[index],
+                action,
+                reason,
+                inspection.get("output", ""),
+                mode,
+            )
+            if manager["approve"]:
+                plan = _amend_budget_for_action(plan, action)
+                remote_store.update_plan(plan.id, plan=plan.to_dict())
+                remote_store.event(
+                    plan.id,
+                    "remote_scope_approved_by_manager",
+                    json.dumps({
+                        "risk": manager["risk"],
+                        "reason": manager["reason"],
+                        "action": action,
+                    })[:5000],
+                )
+                try:
+                    checked = validate_remote_action(action, plan.budget)
+                except RemoteContractError as retry_exc:
+                    reason = str(retry_exc)
+                    manager = {
+                        "approve": False,
+                        "escalate": True,
+                        "risk": _scope_risk(action),
+                        "reason": "approved expansion did not satisfy validator",
+                    }
+                else:
+                    context = _append_history(
+                        context,
+                        {
+                            "milestone": index,
+                            "manager_scope_approval": manager,
+                            "action": action,
+                        },
+                    )
+                    if checked["op"] == "write_file":
+                        file_write_count += 1
+                    validated.append(checked)
+                    continue
+
+            request = action_deviation(plan, action, reason)
+            request["manager_review"] = manager
+            request["suggested_action"] = (
+                "Qwen escalated this scope request to the owner. Approve only "
+                "if the requested expansion matches the intended task."
+            )
             remote_store.create_deviation(
                 plan.id,
                 plan.target,
@@ -883,9 +1072,15 @@ def run_remote_plan_step(settings, remote_store, row: dict, mode: str):
 
     if not results or not all(item["ok"] for item in results):
         attempts = int(row["attempts"]) + 1
+        failed = next((item for item in results if not item["ok"]), None)
+        failure_detail = (
+            (failed or {}).get("output", "")[-3000:]
+            if failed else "No action result was produced."
+        )
         context["next_guidance"] = (
-            "A typed SSH action failed. Diagnose the returned output and "
-            "propose the smallest in-contract correction."
+            "The previous remote action failed. Diagnose this exact output and "
+            "self-repair inside the existing contract before asking for more "
+            "authority:\n" + failure_detail
         )
         if attempts >= plan.budget.max_attempts_per_milestone:
             remote_store.create_deviation(
@@ -909,6 +1104,12 @@ def run_remote_plan_step(settings, remote_store, row: dict, mode: str):
         return
 
     fresh = inspect_target(settings, target)
+    review_mode = "deep" if int(row["attempts"]) > 0 else "light"
+    if review_mode == "deep":
+        context["next_guidance"] = (
+            context.get("next_guidance", "")
+            + " Manager review depth is elevated because this milestone needed retries."
+        )[-3000:]
     review = _completion_review(
         settings,
         plan,
@@ -916,6 +1117,11 @@ def run_remote_plan_step(settings, remote_store, row: dict, mode: str):
         results,
         fresh.get("output", ""),
         mode,
+    )
+    remote_store.event(
+        plan.id,
+        "remote_manager_review",
+        review_mode + ": " + str(review.get("reason", ""))[:1500],
     )
     context["next_guidance"] = str(review.get("guidance", ""))[:3000]
     context = _append_history(

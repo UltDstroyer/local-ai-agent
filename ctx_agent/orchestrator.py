@@ -23,6 +23,31 @@ class OrchestrationError(RuntimeError):
     pass
 
 
+def classify_project_error(exc: Exception) -> dict:
+    text = str(exc)
+    lower = text.lower()
+    if isinstance(exc, ContractError):
+        kind = "policy_scope"
+        action = "Review the exact project contract violation."
+    elif "codex" in lower and ("json" in lower or "format" in lower):
+        kind = "codex_format"
+        action = "Retry Codex with the exact formatting correction."
+    elif "timeout" in lower or "timed out" in lower:
+        kind = "timeout"
+        action = "Retry after checking worker responsiveness."
+    elif "codex" in lower or isinstance(exc, RuntimeError):
+        kind = "codex_worker"
+        action = "Retry the same Codex thread with the failure details."
+    else:
+        kind = "workspace_tool"
+        action = "Inspect the exact workspace/tool failure before retrying."
+    return {
+        "type": kind,
+        "error": text[:4000],
+        "suggested_action": action,
+    }
+
+
 def _json_object(text: str) -> dict:
     if not isinstance(text, str):
         raise ContractError("model response was not text")
@@ -426,6 +451,7 @@ the current milestone is complete and on-task. Return JSON only.
 Project goal: {plan.goal}
 Milestone: {milestone}
 Approved plan: {json.dumps(plan.to_dict())[:12000]}
+Manager review depth: {context.get("manager_review_depth", "light")}
 Persistent context: {json.dumps(context)[-6000:]}
 Codex report: {codex_message[:8000]}
 Observed mutation report: {json.dumps(report)}
@@ -463,6 +489,69 @@ within the approved lease. Do not authorize scope expansion yourself."""
             "guidance": "Re-check the milestone, tests, and actual diff; finish only approved work.",
             "context_note": "",
             "reason": "administrator review was inconclusive",
+        }
+
+
+def _manager_amendment_review(
+    settings,
+    plan: Plan,
+    amendment: dict,
+    milestone: str,
+    mode: str,
+) -> dict:
+    budget = amendment.get("mutation_budget") or {}
+    high_risk = bool(
+        budget.get("allow_file_deletion")
+        or budget.get("allow_dependency_changes")
+        or budget.get("allow_config_changes")
+        or budget.get("allow_network")
+    )
+    if high_risk:
+        return {
+            "approve": False,
+            "escalate": True,
+            "reason": "mutation changes dependencies/config/deletions/network authority",
+        }
+    prompt = f"""You are Qwen, the manager for a Codex implementation worker.
+Codex exceeded the current project mutation lease inside an isolated workspace.
+
+Goal: {plan.goal}
+Milestone: {milestone}
+Current plan: {json.dumps(plan.to_dict())[:12000]}
+Requested amendment: {json.dumps(amendment)[:8000]}
+
+Approve only if the expansion is minimal, clearly on-task, and limited to
+ordinary write-scope/file-count/line-count/new-file growth. Escalate anything
+ambiguous or architectural.
+
+Return JSON only:
+{{
+  "approve": true,
+  "escalate": false,
+  "reason": "short reason"
+}}"""
+    try:
+        value = _ask_json_object(
+            settings,
+            [
+                {"role": "system", "content": "Return strict JSON only."},
+                {"role": "user", "content": prompt},
+            ],
+            "balanced" if mode == "quiet" else mode,
+            num_predict=768,
+            num_ctx=4096,
+        )
+        approved = value.get("approve") is True and value.get("escalate") is not True
+        return {
+            "approve": approved,
+            "escalate": not approved,
+            "reason": str(value.get("reason", ""))[:2000],
+        }
+    except Exception as exc:
+        return {
+            "approve": False,
+            "escalate": True,
+            "reason": "manager amendment review failed: " + str(exc)[:1000],
         }
 
 
@@ -578,10 +667,45 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
         reason = "; ".join(violations)
         request = deviation_amendment(plan, report, reason)
         request["codex_summary"] = reply.get("message", "")[:4000]
-        store.create_deviation(plan.id, plan.project, reason, request)
-        return
+        manager = _manager_amendment_review(
+            settings,
+            plan,
+            request,
+            plan.milestones[index],
+            mode,
+        )
+        if manager["approve"]:
+            plan = apply_amendment(plan, request)
+            store.update_plan(plan.id, plan=plan.to_dict())
+            store.event(
+                plan.id,
+                "scope_approved_by_manager",
+                json.dumps({
+                    "reason": manager["reason"],
+                    "amendment": request,
+                })[:5000],
+            )
+            context = dict(context)
+            context["next_guidance"] = (
+                "Qwen approved the narrow mutation-lease expansion. Continue "
+                "the current milestone under the updated contract."
+            )
+            store.update_plan(plan.id, context=context)
+            report = analyze_changes(source, workspace)
+            violations = contract_violations(plan, report)
+        if violations:
+            request["manager_review"] = manager
+            request["suggested_action"] = (
+                "Qwen escalated this mutation-lease expansion to the owner."
+            )
+            store.create_deviation(plan.id, plan.project, reason, request)
+            return
 
     _, patch = diff(source, workspace)
+    context = dict(context)
+    context["manager_review_depth"] = (
+        "deep" if int(row["attempts"]) > 0 else "light"
+    )
     review = _admin_review(
         settings,
         plan,

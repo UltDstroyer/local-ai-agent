@@ -60,8 +60,11 @@ Media:
 
 Plan creation is read-only. ctx-agent and Codex negotiate a mutation budget,
 then wait for owner approval. Approved plans execute autonomously only in
-maximum mode. Scope-expanding deviations pause and require owner approval.
-Codex/ChatGPT authentication stays in the desktop user's own Codex storage.
+maximum mode. Codex may ask Qwen for narrow scope expansion; Qwen can approve
+reasonable typed expansions and escalates high-risk or ambiguous requests to
+the owner. Approval terminals stream progress and print owner deviations as
+soon as they occur. Codex/ChatGPT authentication stays in the desktop user's
+own Codex storage.
 """
 
 
