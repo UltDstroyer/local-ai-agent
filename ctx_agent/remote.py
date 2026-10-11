@@ -409,6 +409,19 @@ def validate_remote_action(action: object, budget: RemoteBudget) -> dict:
             )
         if type(timeout) is not int or not 5 <= timeout <= 3600:
             raise RemoteContractError("remote_exec timeout out of bounds")
+        lower_command = command.lower()
+        typed_only_patterns = (
+            r"\bapt(?:-get)?\s+(?:install|remove|purge)\b",
+            r"\b(?:dnf|yum|zypper)\s+(?:install|remove)\b",
+            r"\bpacman\s+-[sr]\b",
+            r"\bsystemctl\s+(?:start|restart|enable|disable|stop)\b",
+            r"\bservice\s+\S+\s+(?:start|restart|stop)\b",
+            r"\b(?:curl|wget)\b[^\n]*(?:/usr/local/bin|/usr/bin|/opt/|\.deb\b|\.rpm\b)",
+        )
+        if any(re.search(pattern, lower_command) for pattern in typed_only_patterns):
+            raise RemoteContractError(
+                "remote_exec dependency/service mutation must use a typed action"
+            )
         result["command"] = command
         result["as_root"] = as_root
         result["timeout"] = timeout
