@@ -18,6 +18,7 @@ from .contracts import (
 )
 from .snapshot import create, diff, inventory
 from .governance import owner_decision_key, valid_local_owner_request
+from .management import ensure_management_contract
 
 
 class OrchestrationError(RuntimeError):
@@ -365,8 +366,10 @@ def create_negotiated_plan(
         "codex_agreement": agreement,
     }
     store.create_plan(project, goal, stored)
+    fields = {"context": ensure_management_contract({})}
     if codex.get("thread_id"):
-        store.update_plan(plan.id, codex_thread=codex["thread_id"])
+        fields["codex_thread"] = codex["thread_id"]
+    store.update_plan(plan.id, **fields)
     return store.get_plan(plan.id)
 
 
