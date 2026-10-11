@@ -547,10 +547,11 @@ class Coordinator:
                         self.remote_store.get_plan(row["id"])
                     )
                 }
-            if not self.remote_store.cancel_plan(row["id"]):
-                raise ValueError(
-                    "Remote plan cannot be cancelled in its current state"
-                )
+            with self.execution_lock:
+                if not self.remote_store.cancel_plan(row["id"]):
+                    raise ValueError(
+                        "Remote plan cannot be cancelled in its current state"
+                    )
             self.remote_inputs.pop(row["id"], None)
             return {
                 "plan": self._remote_plan_view(
@@ -803,8 +804,9 @@ class Coordinator:
                     raise ValueError("Plan is not awaiting approval")
                 return {"plan": self._plan_view(self.store.get_plan(pid))}
             if op == "plan_cancel":
-                if not self.store.cancel_plan(pid):
-                    raise ValueError("Plan cannot be cancelled in its current state")
+                with self.execution_lock:
+                    if not self.store.cancel_plan(pid):
+                        raise ValueError("Plan cannot be cancelled in its current state")
                 return {"plan": self._plan_view(self.store.get_plan(pid))}
 
             workspace = ensure_workspace(self.settings, source, pid)
@@ -816,32 +818,42 @@ class Coordinator:
                     "diff": patch,
                     "mutation_usage": report.to_dict(),
                 }
-            if row["status"] != "ready_for_review":
-                raise ValueError("Plan is not ready for final owner review")
-            plan = Plan.from_dict(row["plan"], project, pid)
-            violations = contract_violations(plan, report)
-            if violations:
-                raise ValueError("Final diff violates approved plan: " + "; ".join(violations))
-            baseline_path = self._baseline_path(pid)
-            if not baseline_path.exists():
-                raise ValueError("Missing approved-plan baseline")
-            baseline = json.loads(baseline_path.read_text())
-            current = digest_inventory(source)
-            for rel in report.changed:
-                if current.get(rel) != baseline.get(rel):
-                    raise ValueError(f"Managed project changed since approval: {rel}")
-            applied = apply(
-                source,
-                workspace,
-                allow_deletions=plan.budget.allow_file_deletion,
-            )
-            self.store.update_plan(
-                pid,
-                status="completed",
-                result=row.get("result", "") + "\n\nApplied by owner.",
-            )
-            self.store.event(pid, "plan_applied_by_owner", ",".join(applied)[:2000])
-            return {"applied": applied, "plan": self.store.get_plan(pid)}
+            with self.execution_lock:
+                row = self.store.get_plan(pid)
+                if not row or row["status"] != "ready_for_review":
+                    raise ValueError("Plan is not ready for final owner review")
+                workspace = ensure_workspace(self.settings, source, pid)
+                report = analyze_changes(source, workspace)
+                plan = Plan.from_dict(row["plan"], project, pid)
+                violations = contract_violations(plan, report)
+                if violations:
+                    raise ValueError(
+                        "Final diff violates approved plan: " + "; ".join(violations)
+                    )
+                baseline_path = self._baseline_path(pid)
+                if not baseline_path.exists():
+                    raise ValueError("Missing approved-plan baseline")
+                baseline = json.loads(baseline_path.read_text())
+                current = digest_inventory(source)
+                for rel in report.changed:
+                    if current.get(rel) != baseline.get(rel):
+                        raise ValueError(
+                            f"Managed project changed since approval: {rel}"
+                        )
+                applied = apply(
+                    source,
+                    workspace,
+                    allow_deletions=plan.budget.allow_file_deletion,
+                )
+                self.store.update_plan(
+                    pid,
+                    status="completed",
+                    result=row.get("result", "") + "\n\nApplied by owner.",
+                )
+                self.store.event(
+                    pid, "plan_applied_by_owner", ",".join(applied)[:2000]
+                )
+                return {"applied": applied, "plan": self.store.get_plan(pid)}
 
         if op == "deviation_list":
             self._retire_invalid_local_deviations()
