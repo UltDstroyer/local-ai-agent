@@ -8,6 +8,7 @@ owner.
 from __future__ import annotations
 
 import hashlib
+import json
 
 REMOTE_OWNER_TYPES = {
     "remote_scope",
@@ -87,20 +88,63 @@ def owner_decision_key(request: object) -> str:
     """Stable identity for one boss question, independent of explanatory prose."""
     if not isinstance(request, dict):
         return ""
+
     input_request = request.get("input_request")
     if isinstance(input_request, dict):
         key = input_request.get("key")
         if isinstance(key, str) and key.strip():
             return "input:" + key.strip().lower()
+
     kind = request.get("type")
+    if not isinstance(kind, str) or not kind.strip():
+        return ""
+    normalized_kind = kind.strip().lower()
+
+    proposed_action = request.get("proposed_action")
+    if normalized_kind in {
+        "remote_scope",
+        "dependency_install",
+        "service_activation",
+        "critical_remote_exec",
+    } and isinstance(proposed_action, dict) and proposed_action:
+        canonical = json.dumps(
+            proposed_action,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        digest = hashlib.sha256(
+            (normalized_kind + "\n" + canonical).encode()
+        ).hexdigest()[:32]
+        return "action:" + digest
+
+    if normalized_kind == "mutation_amendment":
+        mutation = request.get("mutation_budget")
+        add_scope = request.get("add_write_scope")
+        canonical = json.dumps(
+            {
+                "mutation_budget": mutation if isinstance(mutation, dict) else {},
+                "add_write_scope": sorted(
+                    str(x) for x in add_scope
+                ) if isinstance(add_scope, list) else [],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        digest = hashlib.sha256(
+            (normalized_kind + "\n" + canonical).encode()
+        ).hexdigest()[:32]
+        return "mutation:" + digest
+
     boss_request = request.get("boss_request")
-    if not isinstance(kind, str) or not isinstance(boss_request, str):
+    if not isinstance(boss_request, str):
         return ""
     normalized = " ".join(boss_request.lower().split())
     if not normalized:
         return ""
     digest = hashlib.sha256(
-        (kind.strip().lower() + "\n" + normalized).encode()
+        (normalized_kind + "\n" + normalized).encode()
     ).hexdigest()[:32]
     return "decision:" + digest
 
