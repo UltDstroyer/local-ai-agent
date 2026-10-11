@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from .governance import valid_remote_owner_request
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS targets (
@@ -349,6 +350,10 @@ class RemoteStore:
     def create_deviation(
         self, plan: str, target: str, reason: str, request: dict
     ) -> str:
+        if not valid_remote_owner_request(request):
+            raise ValueError(
+                "remote deviation request is not eligible for owner approval"
+            )
         did = uuid.uuid4().hex[:12]
         now = time.time()
         with self.lock, self.db:
