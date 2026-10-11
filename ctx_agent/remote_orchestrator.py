@@ -28,24 +28,33 @@ def _json_object(text: str) -> dict:
     if not isinstance(text, str):
         raise RemoteContractError("model response was not text")
     value = text.strip()
-    if value.startswith("~~~"):
+    if value.startswith(("~~~", "```")):
         lines = value.splitlines()
-        if lines and lines[0].startswith("~~~"):
+        if lines and lines[0].startswith(("~~~", "```")):
             lines = lines[1:]
-        if lines and lines[-1].strip() == "~~~":
+        if lines and lines[-1].strip() in ("~~~", "```"):
             lines = lines[:-1]
         value = "\n".join(lines).strip()
+    last_error = None
     try:
         parsed = json.loads(value)
         if isinstance(parsed, dict):
             return parsed
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as exc:
+        last_error = exc
     start, end = value.find("{"), value.rfind("}")
     if start >= 0 and end > start:
-        parsed = json.loads(value[start:end + 1])
-        if isinstance(parsed, dict):
-            return parsed
+        try:
+            parsed = json.loads(value[start:end + 1])
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise RemoteContractError(
+            f"model returned malformed JSON at line {last_error.lineno} "
+            f"column {last_error.colno}: {last_error.msg}"
+        ) from last_error
     raise RemoteContractError("model did not return a JSON object")
 
 
@@ -251,6 +260,7 @@ def create_remote_plan(
         ],
         "balanced" if mode == "quiet" else mode,
         tools=[],
+        json_mode=True,
     )
     admin = _json_object(str(admin_message.get("content", "")))
     plan = RemotePlan.from_dict(admin, target.name, pid)

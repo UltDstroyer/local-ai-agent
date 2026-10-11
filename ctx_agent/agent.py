@@ -52,7 +52,7 @@ TOOLS = [
 
 
 def ask(settings: Settings, messages: list[dict], mode: str = 'quiet',
-        tools: list[dict] | None = None) -> dict:
+        tools: list[dict] | None = None, json_mode: bool = False) -> dict:
     from .resources import ollama_options
     payload = {"model": settings.model, "stream": False,
                        "messages": messages,
@@ -66,6 +66,10 @@ def ask(settings: Settings, messages: list[dict], mode: str = 'quiet',
     selected_tools = TOOLS if tools is None else tools
     if selected_tools:
         payload["tools"] = selected_tools
+    if json_mode:
+        # Ollama's JSON mode constrains administrative/planning responses to
+        # valid JSON instead of relying only on prompt wording.
+        payload["format"] = "json"
     body = json.dumps(payload).encode()
     request = urllib.request.Request(
         settings.ollama_url, body,

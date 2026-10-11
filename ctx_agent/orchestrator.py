@@ -27,24 +27,33 @@ def _json_object(text: str) -> dict:
     if not isinstance(text, str):
         raise ContractError("model response was not text")
     stripped = text.strip()
-    if stripped.startswith("~~~"):
+    if stripped.startswith(("~~~", "```")):
         lines = stripped.splitlines()
-        if lines and lines[0].startswith("~~~"):
+        if lines and lines[0].startswith(("~~~", "```")):
             lines = lines[1:]
-        if lines and lines[-1].strip() == "~~~":
+        if lines and lines[-1].strip() in ("~~~", "```"):
             lines = lines[:-1]
         stripped = "\n".join(lines).strip()
+    last_error = None
     try:
         value = json.loads(stripped)
         if isinstance(value, dict):
             return value
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as exc:
+        last_error = exc
     start, end = stripped.find("{"), stripped.rfind("}")
     if start >= 0 and end > start:
-        value = json.loads(stripped[start:end + 1])
-        if isinstance(value, dict):
-            return value
+        try:
+            value = json.loads(stripped[start:end + 1])
+            if isinstance(value, dict):
+                return value
+        except json.JSONDecodeError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise ContractError(
+            f"model returned malformed JSON at line {last_error.lineno} "
+            f"column {last_error.colno}: {last_error.msg}"
+        ) from last_error
     raise ContractError("model did not return a JSON object")
 
 
@@ -258,6 +267,7 @@ def create_negotiated_plan(settings, store, source: Path, project: str, goal: st
             ],
             "balanced" if mode == "quiet" else mode,
             tools=[],
+            json_mode=True,
         )
         final_admin = _json_object(
             str(final_admin_message.get("content", ""))
@@ -395,6 +405,7 @@ within the approved lease. Do not authorize scope expansion yourself."""
             ],
             "balanced" if mode == "quiet" else mode,
             tools=[],
+            json_mode=True,
         )
         value = _json_object(str(response.get("content", "")))
         if value.get("state") not in ("complete", "continue", "blocked"):
