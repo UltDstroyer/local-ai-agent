@@ -1153,6 +1153,10 @@ def approve_deviation(settings, store, source: Path, did: str) -> dict:
     row = store.get_plan(deviation["plan"])
     if not row:
         raise OrchestrationError("deviation refers to missing plan")
+    if row.get("status") != "awaiting_deviation":
+        raise OrchestrationError(
+            "deviation is stale because the plan is no longer waiting for it"
+        )
     request = deviation["request"]
     if not store.resolve_deviation(did, True):
         raise OrchestrationError("deviation changed concurrently")
