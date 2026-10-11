@@ -26,6 +26,7 @@ class ManagerBriefTests(unittest.TestCase):
         response = {
             "content": json.dumps({
                 "summary": "I need a slightly broader service inspection scope to continue.",
+                "request": "Allow a journal check for jellyfin.service.",
                 "risk": "low",
                 "recommendation": "I recommend approving it.",
                 "decision": "May I approve this narrow scope increase?",
@@ -39,6 +40,10 @@ class ManagerBriefTests(unittest.TestCase):
             )
         self.assertEqual(brief["risk"], "low")
         self.assertIn("broader service inspection", brief["summary"])
+        self.assertEqual(
+            brief["request"],
+            "Allow a journal check for jellyfin.service.",
+        )
         prompt = mocked.call_args.args[1][1]["content"]
         self.assertIn("Codex proposed invalid remote actions", prompt)
 
@@ -80,3 +85,31 @@ class ManagerBriefTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConcreteManagerDecisionTests(unittest.TestCase):
+    def test_fallback_names_structured_service_request(self):
+        deviation = {
+            "reason": "check references unapproved service: jellyfin.service",
+            "request": {
+                "proposed_action": {
+                    "op": "check",
+                    "check": "journal_tail",
+                    "service": "jellyfin.service",
+                },
+                "risk": "low",
+            },
+        }
+        with patch(
+            "ctx_agent.manager_brief.ask",
+            side_effect=RuntimeError("ollama unavailable"),
+        ):
+            brief = manager_deviation_brief(
+                SimpleNamespace(model="qwen3:8b"), deviation, "balanced"
+            )
+        self.assertEqual(
+            brief["request"],
+            "Allow the requested journal_tail on jellyfin.service.",
+        )
+
+
