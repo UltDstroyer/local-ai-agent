@@ -657,10 +657,49 @@ def validate_remote_action(
 
 
 def action_deviation(plan: RemotePlan, action: object, reason: str) -> dict:
+    proposed = action if isinstance(action, dict) else {}
+    op = str(proposed.get("op", "")).strip()
+    if op == "read_file":
+        boss_request = (
+            "Allow read access to "
+            + str(proposed.get("path", "")).strip()
+            + " for this step."
+        )
+    elif op == "write_file":
+        boss_request = (
+            "Allow writing "
+            + str(proposed.get("path", "")).strip()
+            + " for this step."
+        )
+    elif op == "ensure_dir":
+        boss_request = (
+            "Allow creating or updating directory "
+            + str(proposed.get("path", "")).strip()
+            + " for this step."
+        )
+    elif op == "check":
+        check = str(proposed.get("check", "check")).strip()
+        target = (
+            proposed.get("service")
+            or proposed.get("path")
+            or proposed.get("url")
+            or proposed.get("command")
+            or "the requested target"
+        )
+        boss_request = f"Allow the {check} check on {target}."
+    elif op == "remote_exec":
+        boss_request = "Allow this exact remote administration command for the step."
+    else:
+        boss_request = (
+            "Allow the exact proposed "
+            + (op or "remote")
+            + " scope expansion for this step."
+        )
     return {
         "type": "remote_scope",
         "reason": reason[:4000],
-        "proposed_action": action if isinstance(action, dict) else {},
+        "boss_request": boss_request[:500],
+        "proposed_action": proposed,
         "target": plan.target,
         "current_budget": plan.budget.to_dict(),
     }
