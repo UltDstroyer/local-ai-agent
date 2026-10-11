@@ -58,6 +58,28 @@ class PlanStoreTests(unittest.TestCase):
             self.assertEqual(store.get_deviation(did)["status"], "approved")
 
 
+
+
+    def test_duplicate_pending_project_deviations_collapse(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            store = Store(root / "state.sqlite3")
+            plan = Plan.from_dict(raw_plan(), "demo")
+            store.create_plan("demo", plan.goal, plan.to_dict())
+            first = store.create_deviation(
+                plan.id, "demo", "first", {"add_write_scope": ["helper.py"]}
+            )
+            second = store.create_deviation(
+                plan.id, "demo", "second", {"add_write_scope": ["other.py"]}
+            )
+            self.assertEqual(first, second)
+            pending = [
+                item for item in store.list_deviations(plan=plan.id)
+                if item["status"] == "pending"
+            ]
+            self.assertEqual(len(pending), 1)
+
+
 class CoordinatorApprovalTests(unittest.TestCase):
     def test_owner_approval_records_baseline(self):
         with tempfile.TemporaryDirectory() as td:
