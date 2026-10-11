@@ -12,6 +12,8 @@ from ctx_agent.remote import (
     RemotePlan,
     RemoteTarget,
     critical_remote_exec_reason,
+    remote_exec_secret_exposure_reason,
+    sensitive_remote_read_path,
     validate_remote_action,
 )
 from ctx_agent.remote_orchestrator import (
@@ -1199,3 +1201,84 @@ class CriticalRemoteExecApprovalTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PersistentSecretBoundaryTests(unittest.TestCase):
+    def test_secret_bearing_remote_paths_are_never_read_into_agent_context(self):
+        self.assertTrue(sensitive_remote_read_path("/etc/cloudflared/abc.json"))
+        self.assertTrue(sensitive_remote_read_path("/home/pi/.ssh/id_ed25519"))
+        self.assertTrue(sensitive_remote_read_path("/srv/app/.env"))
+        self.assertFalse(sensitive_remote_read_path("/etc/nginx/nginx.conf"))
+        self.assertFalse(sensitive_remote_read_path("/home/pi/.ssh/known_hosts"))
+
+        b = RemoteBudget.from_dict(budget())
+        with self.assertRaisesRegex(
+            RemoteContractError,
+            "persistent secret content",
+        ):
+            validate_remote_action({
+                "op": "read_file",
+                "path": "/etc/cloudflared/config.yml",
+            }, b)
+
+    def test_remote_exec_cannot_dump_persistent_secrets(self):
+        self.assertIsNotNone(remote_exec_secret_exposure_reason(
+            "cat /etc/cloudflared/credentials.json"
+        ))
+        self.assertIsNotNone(remote_exec_secret_exposure_reason(
+            "printenv CLOUDFLARE_TOKEN"
+        ))
+        self.assertIsNotNone(remote_exec_secret_exposure_reason(
+            "cat /proc/self/environ"
+        ))
+        self.assertIsNone(remote_exec_secret_exposure_reason(
+            "systemctl is-active cloudflared"
+        ))
+        b = RemoteBudget.from_dict(budget(allow_remote_admin=True))
+        with self.assertRaisesRegex(
+            RemoteContractError,
+            "persistent secret",
+        ):
+            validate_remote_action({
+                "op": "remote_exec",
+                "command": "cat /etc/cloudflared/credentials.json",
+                "as_root": False,
+                "timeout": 60,
+            }, b)
+
+
+class DeviationResumeRaceTests(unittest.TestCase):
+    def test_cancelled_remote_plan_cannot_be_resurrected_by_late_resume(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = RemoteStore(Path(td) / "remote.sqlite3")
+            target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
+            store.put_target(target.to_dict())
+            plan = RemotePlan.from_dict({
+                "goal": "demo",
+                "milestones": ["one"],
+                "verification": ["done"],
+                "risks": [],
+                "assumptions": [],
+                "remote_budget": budget(),
+            }, "pi")
+            store.create_plan("pi", plan.goal, plan.to_dict())
+            store.approve_plan(plan.id)
+            row = store.next_plan()
+            self.assertEqual(row["status"], "running")
+            store.create_deviation(
+                plan.id,
+                "pi",
+                "decision",
+                {
+                    "type": "manager_escalation",
+                    "boss_request": "Allow one real owner decision.",
+                    "risk": "medium",
+                },
+            )
+            self.assertTrue(store.cancel_plan(plan.id))
+            self.assertFalse(store.resume_from_deviation(
+                plan.id,
+                attempts=0,
+                context={},
+            ))
+            self.assertEqual(store.get_plan(plan.id)["status"], "cancelled")
