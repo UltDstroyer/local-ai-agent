@@ -325,5 +325,55 @@ class AdapterTests(unittest.TestCase):
         ])
 
 
+    def test_chat_routes_to_single_remote_manager(self):
+        state = (
+            [],
+            [{
+                "id": "plan123",
+                "target": "pi",
+                "status": "awaiting_deviation",
+            }],
+            [],
+            [],
+        )
+        result, cli, _ = self.invoke(
+            ["chat", "Why do you need this?"],
+            context="",
+            state=state,
+        )
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with([
+            "remote-plan-chat",
+            "pi",
+            "plan123",
+            "Why do you need this?",
+        ])
+
+    def test_chat_target_routes_explicitly(self):
+        state = (
+            [],
+            [{
+                "id": "plan123",
+                "target": "pi",
+                "status": "running",
+                "updated": 20,
+            }],
+            [],
+            [],
+        )
+        result, cli, _ = self.invoke(
+            ["chat", "--target", "pi", "Preserve nginx."],
+            context="",
+            state=state,
+        )
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with([
+            "remote-plan-chat",
+            "pi",
+            "plan123",
+            "Preserve nginx.",
+        ])
+
+
 if __name__ == "__main__":
     unittest.main()
