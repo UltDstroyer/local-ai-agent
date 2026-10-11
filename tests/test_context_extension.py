@@ -155,6 +155,18 @@ class AdapterTests(unittest.TestCase):
             "target-add", "pi", "pi@raspberrypi"
         ])
 
+    def test_progress_uses_active_project(self):
+        result, cli, _ = self.invoke(["progress"])
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with(["plan-progress", "research"])
+
+    def test_remote_progress_routes_to_target(self):
+        result, cli, _ = self.invoke(
+            ["progress", "--target", "pi"], context=""
+        )
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with(["remote-plan-progress", "pi"])
+
     def test_remote_deviation_is_separate_from_local(self):
         result, cli, _ = self.invoke(
             ["remote-deviation", "approve", "abc123def456"],
