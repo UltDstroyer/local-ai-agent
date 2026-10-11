@@ -27,6 +27,7 @@ from ctx_agent.remote_orchestrator import (
     _codex_manager_checkin_remote,
     _dependency_key,
     _dependency_owner_request,
+    _dependency_preapproved,
     _dependency_request_from_checkin,
     _human_input_error,
     _is_remote_action_format_error,
