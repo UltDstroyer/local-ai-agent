@@ -67,7 +67,7 @@ def _progress_line(progress):
             eta = "time left unknown"
     percent = progress.get("percent_complete")
     pct = f" · {percent}%" if isinstance(percent, int) else ""
-    return f"[ctx-agent] {prefix}{stage}{pct} · elapsed {elapsed} · {eta}"
+    return f"[Qwen manager] {prefix}{stage}{pct} · elapsed {elapsed} · {eta}"
 
 
 def _print_progress_report(progress):
@@ -138,7 +138,7 @@ def _call_with_progress(path, payload, progress_payload, timeout):
                 last = key
             planned = tuple(snapshot.get("planned_execution_stages") or [])
             if planned and planned != last_planned:
-                print("[ctx-agent] Planned execution stages:", file=sys.stderr)
+                print("[Qwen manager] Planned execution stages:", file=sys.stderr)
                 for index, name in enumerate(planned, 1):
                     print(f"  {index}. {name}", file=sys.stderr)
                 last_planned = planned
