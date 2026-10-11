@@ -196,8 +196,39 @@ class Coordinator:
     def _baseline_path(self, pid: str) -> Path:
         return self.plan_baselines / f"{pid}.json"
 
+    @staticmethod
+    def _public_deviations(items: list[dict]) -> list[dict]:
+        return [
+            {
+                "id": item.get("id", ""),
+                "status": item.get("status", ""),
+                "created": item.get("created"),
+                "updated": item.get("updated"),
+            }
+            for item in items[:10]
+        ]
+
+    @staticmethod
+    def _public_plan_contract(raw: dict) -> dict:
+        value = dict(raw or {})
+        # Negotiation transcripts and Codex proposals are audit data, not part
+        # of the boss-facing plan contract.
+        value.pop("planning", None)
+        return value
+
     def _plan_view(self, row: dict) -> dict:
-        value = dict(row)
+        value = {
+            "id": row["id"],
+            "project": row["project"],
+            "goal": row["goal"],
+            "status": row["status"],
+            "current_milestone": row["current_milestone"],
+            "plan": self._public_plan_contract(row.get("plan", {})),
+            "created": row.get("created"),
+            "updated": row.get("updated"),
+            "result": row.get("result", ""),
+            "has_internal_error": bool(row.get("error")),
+        }
         workspace = (
             self.settings.workspaces_dir / row["id"]
             if self.settings.workspaces_dir else None
@@ -205,7 +236,9 @@ class Coordinator:
         if workspace and workspace.is_dir():
             report = analyze_changes(self.project(row["project"]), workspace)
             value["mutation_usage"] = report.to_dict()
-        value["deviations"] = self.store.list_deviations(plan=row["id"])[:10]
+        value["deviations"] = self._public_deviations(
+            self.store.list_deviations(plan=row["id"])
+        )
         value["progress"] = plan_snapshot(
             row,
             self.store.events(row["id"]),
@@ -216,10 +249,21 @@ class Coordinator:
         return value
 
     def _remote_plan_view(self, row: dict) -> dict:
-        value = dict(row)
-        value["deviations"] = self.remote_store.list_deviations(
-            plan=row["id"]
-        )[:10]
+        value = {
+            "id": row["id"],
+            "target": row["target"],
+            "goal": row["goal"],
+            "status": row["status"],
+            "current_milestone": row["current_milestone"],
+            "plan": self._public_plan_contract(row.get("plan", {})),
+            "created": row.get("created"),
+            "updated": row.get("updated"),
+            "result": row.get("result", ""),
+            "has_internal_error": bool(row.get("error")),
+        }
+        value["deviations"] = self._public_deviations(
+            self.remote_store.list_deviations(plan=row["id"])
+        )
         value["progress"] = plan_snapshot(
             row,
             self.remote_store.events(row["id"]),
