@@ -323,10 +323,17 @@ def _follow_approved_plan(path, plan, *, remote):
             last = key
         phase = snapshot.get("phase")
         if phase == "awaiting_deviation":
-            _show_pending_deviation(
+            shown = _show_pending_deviation(
                 path, remote=remote, scope=scope, plan_id=pid
             )
-            return
+            if shown:
+                return
+            # Governance may have retired an internal/obsolete deviation while
+            # we queried it. In that case the plan has resumed and the live
+            # watcher must keep following so the next real boss decision is
+            # surfaced automatically.
+            time.sleep(0.25)
+            continue
         if phase in (
             "completed",
             "cancelled",
