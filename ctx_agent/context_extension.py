@@ -73,6 +73,64 @@ def fail(message: str) -> int:
     return 2
 
 
+def _socket_path() -> str:
+    return os.environ.get("CTX_AGENT_SOCKET", "/run/ctx-agent/agent.sock")
+
+
+def _global_state():
+    local_plans = agent_cli.call(
+        _socket_path(), {"op": "plan_list"}, timeout=15
+    ).get("plans", [])
+    remote_plans = agent_cli.call(
+        _socket_path(), {"op": "remote_plan_list"}, timeout=15
+    ).get("plans", [])
+    local_deviations = agent_cli.call(
+        _socket_path(), {"op": "deviation_list"}, timeout=15
+    ).get("deviations", [])
+    remote_deviations = agent_cli.call(
+        _socket_path(), {"op": "remote_deviation_list"}, timeout=15
+    ).get("deviations", [])
+    return local_plans, remote_plans, local_deviations, remote_deviations
+
+
+def _single_current_plan():
+    local_plans, remote_plans, _, _ = _global_state()
+    active_statuses = {
+        "awaiting_approval", "approved", "running",
+        "awaiting_deviation", "ready_for_review",
+    }
+    candidates = [
+        ("project", item) for item in local_plans
+        if item.get("status") in active_statuses
+    ] + [
+        ("target", item) for item in remote_plans
+        if item.get("status") in active_statuses
+    ]
+    if not candidates:
+        raise ValueError("no active agent plan")
+    if len(candidates) != 1:
+        raise ValueError(
+            "multiple active agent plans; provide --project NAME or --target NAME"
+        )
+    return candidates[0]
+
+
+def _single_pending_deviation():
+    _, _, local, remote = _global_state()
+    candidates = [
+        ("local", item) for item in local if item.get("status") == "pending"
+    ] + [
+        ("remote", item) for item in remote if item.get("status") == "pending"
+    ]
+    if not candidates:
+        raise ValueError("no pending agent deviation")
+    if len(candidates) != 1:
+        raise ValueError(
+            "multiple pending deviations; use ctx agent deviations to choose one"
+        )
+    return candidates[0]
+
+
 def select_project(rest: list[str]) -> tuple[str, list[str]]:
     if rest[:1] == ["--project"]:
         if len(rest) < 2:
@@ -162,13 +220,19 @@ def _progress(rest: list[str]) -> int:
             "usage: ctx agent progress [--project NAME | --target NAME] [PLAN_ID]"
         )
     project = os.environ.get("CTX_CONTEXT", "")
-    if not project:
-        return fail(
-            "no active ctx context; provide --project NAME or --target NAME"
-        )
-    if not valid_name(project):
-        return fail("invalid agent project name")
-    return agent_cli.main(["plan-progress", project, *rest])
+    if project:
+        if not valid_name(project):
+            return fail("invalid agent project name")
+        return agent_cli.main(["plan-progress", project, *rest])
+
+    scope_type, plan = _single_current_plan()
+    if scope_type == "target":
+        return agent_cli.main([
+            "remote-plan-progress", plan["target"], plan["id"]
+        ])
+    return agent_cli.main([
+        "plan-progress", plan["project"], plan["id"]
+    ])
 
 
 def _approval(action: str, rest: list[str]) -> int:
@@ -183,6 +247,33 @@ def _approval(action: str, rest: list[str]) -> int:
         return agent_cli.main(
             ["remote-plan-" + action, target, *rest[2:]]
         )
+    if not rest and not os.environ.get("CTX_CONTEXT", ""):
+        try:
+            kind, deviation = _single_pending_deviation()
+        except ValueError as exc:
+            if str(exc) != "no pending agent deviation":
+                raise
+        else:
+            command = (
+                "remote-deviation-" + action
+                if kind == "remote"
+                else "deviation-" + action
+            )
+            return agent_cli.main([command, deviation["id"]])
+
+        scope_type, plan = _single_current_plan()
+        if plan.get("status") != "awaiting_approval":
+            raise ValueError(
+                "current plan is not awaiting approval and no deviation is pending"
+            )
+        command = (
+            "remote-plan-" + action
+            if scope_type == "target"
+            else "plan-" + action
+        )
+        scope = plan["target"] if scope_type == "target" else plan["project"]
+        return agent_cli.main([command, scope, plan["id"]])
+
     project, args = select_project(rest)
     if len(args) > 1:
         return fail(f"usage: ctx agent {action} [--project NAME] [PLAN_ID]")
@@ -190,8 +281,12 @@ def _approval(action: str, rest: list[str]) -> int:
 
 
 def _deviation(rest: list[str]) -> int:
+    if not rest:
+        kind, deviation = _single_pending_deviation()
+        command = "remote-deviation-show" if kind == "remote" else "deviation-show"
+        return agent_cli.main([command, deviation["id"]])
     if len(rest) != 2 or rest[0] not in ("show", "approve", "reject"):
-        return fail("usage: ctx agent deviation show|approve|reject DEVIATION_ID")
+        return fail("usage: ctx agent deviation [show|approve|reject DEVIATION_ID]")
     return agent_cli.main(["deviation-" + rest[0], rest[1]])
 
 
