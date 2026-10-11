@@ -899,6 +899,23 @@ strategy before escalating to the owner."""
         }
 
 
+def _reset_remote_transient_recovery(context: dict) -> dict:
+    value = dict(context)
+    for key in (
+        "invalid_proposal_recoveries",
+        "unsupported_action_recoveries",
+        "dependency_review_recoveries",
+        "dependency_disagreement_cycles",
+        "critical_review_recoveries",
+        "critical_action_disagreement_cycles",
+        "manager_recovery_cycles",
+        "manager_review_recoveries",
+        "worker_internal_recoveries",
+    ):
+        value.pop(key, None)
+    return value
+
+
 def _append_history(context: dict, entry: dict) -> dict:
     value = dict(context) if isinstance(context, dict) else {}
     history = list(value.get("history", []))
@@ -2719,6 +2736,7 @@ def run_remote_plan_step(
     )
 
     if review["state"] == "complete":
+        context = _reset_remote_transient_recovery(context)
         remote_store.update_plan(
             plan.id,
             status="approved",
