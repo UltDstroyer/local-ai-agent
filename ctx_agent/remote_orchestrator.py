@@ -548,6 +548,109 @@ def _human_input_error(input_request: object) -> str | None:
     return None
 
 
+def _codex_manager_checkin_remote(
+    settings,
+    plan: RemotePlan,
+    row: dict,
+    context_dir: Path,
+    codex_thread: str,
+    inspection: str,
+    results: list[dict],
+    manager_review: dict,
+    mode: str,
+) -> dict:
+    """Let Codex and Qwen confer before any owner escalation."""
+    manager_note = {
+        "state": manager_review.get("state"),
+        "guidance": manager_review.get("guidance"),
+        "reason": manager_review.get("reason"),
+        "owner_needed": manager_review.get("owner_needed", False),
+        "owner_request": manager_review.get("owner_request", ""),
+        "risk": manager_review.get("risk", "medium"),
+    }
+    prompt = f"""You are Codex, the senior technical engineer. Qwen is your manager.
+You are generally the stronger technical planner. Before the owner is interrupted,
+review Qwen's latest assessment and either agree with it or propose a better
+technical path that stays inside the approved authority.
+
+Goal:
+{plan.goal}
+
+Current milestone:
+{plan.milestones[int(row["current_milestone"])]}
+
+Approved authority:
+{json.dumps(plan.budget.to_dict())}
+
+Fresh inspection:
+{inspection[:18000]}
+
+Latest action results:
+{json.dumps(results)[-12000:]}
+
+Qwen manager assessment:
+{json.dumps(manager_note)}
+
+Persistent context:
+{json.dumps(row.get("context", {}))[-10000:]}
+
+Return JSON only:
+{{
+  "agreement": true,
+  "better_strategy": "",
+  "guidance_to_manager": "",
+  "owner_needed": false,
+  "owner_request": "",
+  "risk": "low|medium|high"
+}}
+
+Rules:
+- Prefer solving the issue together without involving the owner.
+- If you can see a better technical route, set agreement=false and describe it
+  concretely in better_strategy and guidance_to_manager.
+- Set owner_needed=true only for genuine new authority, a new dependency/service
+  approval, a credential/human-only input, or a human preference/choice.
+- Never ask the owner for observable machine state.
+- Do not bundle unrelated owner decisions.
+"""
+    reply = bridge_call(
+        settings.codex_bridge_socket,
+        {
+            "op": "consult",
+            "cwd": str(context_dir),
+            "thread_id": codex_thread,
+            "prompt": prompt,
+            "timeout": 700,
+        },
+        timeout=730,
+    )
+    if not reply.get("ok"):
+        return {
+            "agreement": True,
+            "better_strategy": "",
+            "guidance_to_manager": "",
+            "owner_needed": manager_review.get("owner_needed", False),
+            "owner_request": manager_review.get("owner_request", ""),
+            "risk": manager_review.get("risk", "medium"),
+        }
+    try:
+        value = _json_object(reply.get("message", ""))
+    except Exception:
+        return {
+            "agreement": True,
+            "better_strategy": "",
+            "guidance_to_manager": "",
+            "owner_needed": manager_review.get("owner_needed", False),
+            "owner_request": manager_review.get("owner_request", ""),
+            "risk": manager_review.get("risk", "medium"),
+        }
+    value["owner_needed"] = value.get("owner_needed") is True
+    value["owner_request"] = str(value.get("owner_request", "")).strip()[:500]
+    risk = str(value.get("risk", "medium")).lower()
+    value["risk"] = risk if risk in ("low", "medium", "high") else "medium"
+    return value
+
+
 def _completion_review(
     settings, plan: RemotePlan, milestone: str, results: list[dict],
     inspection: str, mode: str,
@@ -1483,6 +1586,42 @@ def run_remote_plan_step(
         "remote_manager_review",
         review_mode + ": " + str(review.get("reason", ""))[:1500],
     )
+    checkin = _codex_manager_checkin_remote(
+        settings,
+        plan,
+        row,
+        context_dir,
+        row.get("codex_thread", ""),
+        fresh.get("output", ""),
+        results,
+        review,
+        mode,
+    )
+    remote_store.event(
+        plan.id,
+        "remote_codex_manager_checkin",
+        json.dumps({
+            "agreement": checkin.get("agreement"),
+            "owner_needed": checkin.get("owner_needed"),
+            "risk": checkin.get("risk"),
+        })[:1200],
+    )
+    if checkin.get("agreement") is False and checkin.get("better_strategy"):
+        context["manager_strategy"] = str(checkin.get("better_strategy", ""))[:3000]
+        review["state"] = "continue"
+        review["owner_needed"] = False
+        review["owner_request"] = ""
+        review["guidance"] = str(
+            checkin.get("guidance_to_manager") or checkin.get("better_strategy")
+        )[:3000]
+        review["reason"] = (
+            "Codex proposed a stronger technical approach during manager check-in."
+        )
+    elif checkin.get("owner_needed") is True:
+        review["owner_needed"] = True
+        if checkin.get("owner_request"):
+            review["owner_request"] = checkin["owner_request"]
+        review["risk"] = checkin.get("risk", review.get("risk", "medium"))
     context["next_guidance"] = str(review.get("guidance", ""))[:3000]
     context = _append_history(
         context,
