@@ -117,6 +117,21 @@ def remote_path_matches(path: str, patterns: tuple[str, ...] | list[str]) -> boo
     return any(fnmatch.fnmatchcase(normalized, pattern) for pattern in patterns)
 
 
+def canonical_service_name(value: str) -> str:
+    """Normalize equivalent systemd service spellings for scope checks."""
+    if not isinstance(value, str) or not SERVICE_RE.fullmatch(value):
+        raise RemoteContractError("invalid service name")
+    return value[:-8] if value.endswith(".service") else value
+
+
+def remote_service_allowed(
+    service: str, allowed_services: tuple[str, ...] | list[str]
+) -> bool:
+    """Treat foo and foo.service as the same approved systemd service."""
+    canonical = canonical_service_name(service)
+    return any(canonical_service_name(item) == canonical for item in allowed_services)
+
+
 def _safe_url(url: str, allowed_domains: tuple[str, ...]) -> str:
     if not isinstance(url, str) or len(url) > 2048:
         raise RemoteContractError("invalid URL")
@@ -357,7 +372,7 @@ def validate_remote_action(action: object, budget: RemoteBudget) -> dict:
     elif op == "service":
         service = action.get("service", "")
         service_action = action.get("action", "")
-        if service not in budget.allowed_services:
+        if not remote_service_allowed(service, budget.allowed_services):
             raise RemoteContractError(f"service outside remote contract: {service}")
         if service_action not in SERVICE_ACTIONS:
             raise RemoteContractError("unsupported service action")
@@ -410,8 +425,10 @@ def validate_remote_action(action: object, budget: RemoteBudget) -> dict:
             result["url"] = url
         if check in ("systemctl_is_active", "journal_tail"):
             service = action.get("service", "")
-            if service not in budget.allowed_services:
-                raise RemoteContractError("check references unapproved service")
+            if not remote_service_allowed(service, budget.allowed_services):
+                raise RemoteContractError(
+                    f"check references unapproved service: {service}"
+                )
         if check == "path_exists":
             path = _absolute_remote_pattern(action.get("path", ""))
             if not (
