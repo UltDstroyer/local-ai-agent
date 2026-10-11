@@ -277,12 +277,13 @@ class Coordinator:
         return self.settings.state_dir / "owner-policy.json"
 
     def _load_owner_policy(self) -> dict:
-        try:
-            value = json.loads(self._owner_policy_path().read_text())
-            if isinstance(value, dict):
-                return value
-        except (OSError, ValueError, TypeError):
-            pass
+        with self.lock:
+            try:
+                value = json.loads(self._owner_policy_path().read_text())
+                if isinstance(value, dict):
+                    return value
+            except (OSError, ValueError, TypeError):
+                pass
         return {
             "explicit_preferences": [],
             "decision_evidence": [],
@@ -291,8 +292,10 @@ class Coordinator:
     def _save_owner_policy(self, policy: dict):
         path = self._owner_policy_path()
         temp = path.with_suffix(".tmp")
-        temp.write_text(json.dumps(policy, indent=2, ensure_ascii=False))
-        temp.replace(path)
+        with self.lock:
+            temp.write_text(json.dumps(policy, indent=2, ensure_ascii=False))
+            temp.chmod(0o660)
+            temp.replace(path)
 
     def _record_owner_decision_evidence(
         self, *, outcome: str, request: dict, scope: str
