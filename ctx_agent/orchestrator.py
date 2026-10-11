@@ -640,6 +640,97 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
         store.event(plan.id, "admin_guidance", review.get("guidance", ""))
 
 
+def summarize_deviation(settings, deviation: dict, mode: str) -> dict:
+    """Return a short Qwen assessment for owner display and low-risk retry policy."""
+    request = deviation.get("request") if isinstance(deviation, dict) else {}
+    if not isinstance(request, dict):
+        request = {}
+    source = {
+        "reason": str(deviation.get("reason", ""))[:600],
+        "type": request.get("type"),
+        "milestone": str(request.get("milestone", ""))[:500],
+        "attempts": request.get("attempts"),
+        "suggested_action": str(request.get("suggested_action", ""))[:800],
+        "codex_summary": str(request.get("codex_summary", ""))[-1600:],
+        "error": str(request.get("error", ""))[-1200:],
+    }
+    try:
+        result = _ask_json_object(
+            settings,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Return strict JSON only. Assess a ctx-agent deviation "
+                        "conservatively for the owner."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Give a concise owner-facing summary, recommendation, and "
+                        "risk. Mark auto_approve_safe=true only when approval merely "
+                        "retries or replans inside the already-approved contract and "
+                        "does not expand write scope, dependencies, permissions, "
+                        "network access, deletion authority, credentials, or other "
+                        "privilege. Return exactly "
+                        '{"summary":"...","recommendation":"...",'
+                        '"risk":"low|medium|high","auto_approve_safe":true|false}.\n'
+                        + json.dumps(source)
+                    ),
+                },
+            ],
+            mode,
+            num_predict=500,
+            num_ctx=4096,
+        )
+        return {
+            "summary": str(result.get("summary", ""))[:500],
+            "recommendation": str(result.get("recommendation", ""))[:300],
+            "risk": str(result.get("risk", "unknown")).lower()[:20],
+            "auto_approve_safe": result.get("auto_approve_safe") is True,
+        }
+    except Exception:
+        return {
+            "summary": str(
+                deviation.get("reason", "Project work needs owner attention")
+            )[:500],
+            "recommendation": str(
+                request.get("suggested_action", "Review before continuing.")
+            )[:300],
+            "risk": "unknown",
+            "auto_approve_safe": False,
+        }
+
+
+def auto_approve_low_risk_deviation(
+    settings, store, source: Path, did: str, mode: str
+) -> bool:
+    """Auto-approve only low-risk, non-authority-expanding retry deviations."""
+    deviation = store.get_deviation(did)
+    if not deviation or deviation.get("status") != "pending":
+        return False
+    request = deviation.get("request")
+    if not isinstance(request, dict):
+        return False
+    # Hard boundary: automatic approval may never amend the mutation lease.
+    if request.get("type") not in ("stalled", "system_error"):
+        return False
+    assessment = summarize_deviation(settings, deviation, mode)
+    if (
+        assessment.get("risk") != "low"
+        or assessment.get("auto_approve_safe") is not True
+    ):
+        return False
+    approve_deviation(settings, store, source, did)
+    store.event(
+        deviation["plan"],
+        "deviation_auto_approved_low_risk",
+        assessment.get("summary", "")[:1000],
+    )
+    return True
+
+
 def approve_deviation(settings, store, source: Path, did: str) -> dict:
     deviation = store.get_deviation(did)
     if not deviation or deviation["status"] != "pending":
