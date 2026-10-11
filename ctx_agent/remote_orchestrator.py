@@ -784,6 +784,19 @@ Rules:
             )
             value["guidance_to_manager"] = correction
             value["better_strategy"] = correction
+    if (
+        value.get("owner_needed") is True
+        and not value.get("owner_request")
+        and not isinstance(value.get("dependency_request"), dict)
+    ):
+        value["owner_needed"] = False
+        value["agreement"] = False
+        correction = (
+            "A boss escalation requires exactly one concrete owner_request. "
+            "Clarify the decision internally before escalating."
+        )
+        value["guidance_to_manager"] = correction
+        value["better_strategy"] = correction
     return value
 
 
