@@ -46,11 +46,8 @@ def _print_plan_summary(result):
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return
     contract = row.get("plan") if isinstance(row.get("plan"), dict) else row
-    identity = row.get("id") or contract.get("id") or "unknown"
-    status = row.get("status") or "unknown"
-    scope = row.get("target") or row.get("project") or contract.get("target")
-    suffix = f" · {scope}" if scope else ""
-    print(f"Plan {identity} [{status}]{suffix}")
+    status = str(row.get("status") or "unknown").replace("_", " ")
+    print(f"Current plan [{status}]")
     goal = contract.get("goal") or row.get("goal")
     if goal:
         print("Goal:", _short(goal, 180))
@@ -81,7 +78,10 @@ def _print_plan_summary(result):
             print(f"  - +{len(risks) - 2} more in the stored contract")
     progress = row.get("progress")
     if isinstance(progress, dict) and progress.get("waiting_on"):
-        print("Waiting on:", progress["waiting_on"].replace("_", " "))
+        waiting = progress["waiting_on"]
+        print("Waiting:", waiting.replace("_", " "))
+        if waiting in ("owner_approval", "owner_deviation_decision"):
+            print("Action: ctx agent approve   or   ctx agent reject")
 
 
 def _print_plan_list(result):
@@ -151,10 +151,8 @@ def _print_deviation_summary(result):
         if index:
             print()
         summary, recommendation, risk = _deviation_owner_summary(deviation)
-        print(
-            f"Deviation {deviation.get('id', '?')} "
-            f"[{deviation.get('status', 'unknown')}]"
-        )
+        status = str(deviation.get("status", "unknown")).replace("_", " ")
+        print(f"Current deviation [{status}]")
         print("Summary:", summary)
         if risk and risk != "unknown":
             print("Risk:", risk)
@@ -168,6 +166,33 @@ def _progress_bar(percent, width=24):
     percent = max(0, min(100, percent))
     filled = round(width * percent / 100)
     return "[" + "#" * filled + "-" * (width - filled) + "]"
+
+
+def _print_decision_result(action, result):
+    row = result.get("plan") if isinstance(result, dict) else None
+    status = row.get("status") if isinstance(row, dict) else None
+    if "deviation" in action:
+        verb = "approved" if action.endswith("approve") else "rejected"
+        print(f"Deviation {verb}.")
+        if verb == "approved":
+            print("The agent can continue the current task.")
+        return
+    if action.endswith("approve"):
+        print("Plan approved.")
+        progress = row.get("progress") if isinstance(row, dict) else None
+        waiting = progress.get("waiting_on") if isinstance(progress, dict) else None
+        if waiting == "maximum_mode":
+            print("Next: ctx agent mode maximum")
+        else:
+            print("Next: ctx agent progress")
+        return
+    if action.endswith("reject"):
+        print("Plan rejected.")
+        return
+    if action.endswith("cancel"):
+        print("Plan cancelled.")
+        return
+    print(f"Plan status: {str(status or 'updated').replace('_', ' ')}")
 
 
 def _duration(seconds):
@@ -477,11 +502,15 @@ def main(argv=None):
                     ensure_ascii=False,
                 ))
         elif args.action in (
-            "plan-create", "plan-show", "plan-approve", "plan-reject",
-            "plan-cancel", "remote-plan-create", "remote-plan-show",
+            "plan-approve", "plan-reject", "plan-cancel",
             "remote-plan-approve", "remote-plan-reject", "remote-plan-cancel",
             "deviation-approve", "deviation-reject",
             "remote-deviation-approve", "remote-deviation-reject",
+        ):
+            _print_decision_result(args.action, result)
+        elif args.action in (
+            "plan-create", "plan-show",
+            "remote-plan-create", "remote-plan-show",
         ):
             _print_plan_summary(result)
         elif args.action in ("plan-list", "remote-plan-list"):
