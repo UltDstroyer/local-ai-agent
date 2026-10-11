@@ -1118,11 +1118,6 @@ class Coordinator:
                                 "recovery_plan_retry_after", 0
                             ) or 0
                         ) <= time.time()
-                        and float(
-                            (item.get("context") or {}).get(
-                                "recovery_plan_retry_after", 0
-                            ) or 0
-                        ) <= time.time()
                     ), None)
                     if failed:
                         try:
@@ -1356,6 +1351,11 @@ class Coordinator:
                         and not str(
                             (item.get("context") or {}).get("recovery_plan_id", "")
                         ).strip()
+                        and float(
+                            (item.get("context") or {}).get(
+                                "recovery_plan_retry_after", 0
+                            ) or 0
+                        ) <= time.time()
                     ), None)
                     if failed:
                         try:
