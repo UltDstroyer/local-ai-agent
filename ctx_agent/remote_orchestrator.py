@@ -1726,6 +1726,14 @@ def _dependency_preapproved(
     action: dict,
     approved_dependencies: set[str],
 ) -> bool:
+    if isinstance(action, dict) and action.get("op") == "package_install":
+        packages = action.get("packages")
+        if not isinstance(packages, list) or not packages:
+            return False
+        return all(
+            "packages:" + str(package).strip() in approved_dependencies
+            for package in packages
+        )
     key = _dependency_key(action)
     if not key:
         return False
@@ -2268,6 +2276,31 @@ def run_remote_plan_step(
     approved_critical_execs = set(context.get("approved_critical_execs", []))
     critical_batch_seen = set()
     for action in actions:
+        if (
+            isinstance(action, dict)
+            and action.get("op") == "package_install"
+            and isinstance(action.get("packages"), list)
+            and len(action["packages"]) > 1
+            and not _dependency_preapproved(action, approved_dependencies)
+        ):
+            context["next_guidance"] = (
+                "Qwen manager correction: new dependency approvals must be one "
+                "package at a time. Split this package_install proposal into "
+                "single-package actions and explain why each new dependency is "
+                "needed. Do not bundle dependency approvals for the owner."
+            )
+            remote_store.update_plan(
+                plan.id,
+                status="approved",
+                attempts=0,
+                context=context,
+            )
+            remote_store.event(
+                plan.id,
+                "remote_manager_split_dependency_bundle",
+                ",".join(str(x) for x in action.get("packages", []))[:1000],
+            )
+            return
         owner_action_key = _owner_action_key(action)
         owner_action_approved = owner_action_key in approved_action_leases
         critical_key = None
