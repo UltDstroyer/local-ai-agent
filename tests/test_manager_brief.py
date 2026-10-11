@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from ctx_agent.cli import (
     _follow_approved_plan,
+    _manager_console,
     _print_live_deviation,
     _print_manager_report,
     _print_progress_report,
@@ -123,15 +124,41 @@ class ConcreteManagerDecisionTests(unittest.TestCase):
 
 
 class BossDecisionOutputTests(unittest.TestCase):
-    def test_cli_reports_approval_before_watcher(self):
+    def test_cli_reports_approval_before_manager_console(self):
         text = (
             Path(__file__).resolve().parents[1]
             .joinpath("ctx_agent", "cli.py")
             .read_text()
         )
-        approved = text.index('print("[Qwen manager] approved"')
-        watcher = text.index("_follow_approved_plan(args.socket, plan, remote=remote)")
-        self.assertLess(approved, watcher)
+        main_start = text.index("def main(argv=None):")
+        approved = text.index(
+            'print("[Qwen manager] approved"',
+            main_start,
+        )
+        console = text.index(
+            "_manager_console(args.socket, plan, remote=remote)",
+            main_start,
+        )
+        self.assertLess(approved, console)
+
+    def test_explicit_console_command_attaches_without_socket_dispatch(self):
+        with patch("ctx_agent.cli._manager_console") as console, patch(
+            "ctx_agent.cli.call"
+        ) as direct:
+            rc = cli_main([
+                "--socket",
+                "/tmp/fake.sock",
+                "remote-plan-console",
+                "pi",
+                "plan123",
+            ])
+        self.assertEqual(rc, 0)
+        console.assert_called_once_with(
+            "/tmp/fake.sock",
+            {"id": "plan123", "target": "pi"},
+            remote=True,
+        )
+        direct.assert_not_called()
 
 
 class HumanInputPromptTests(unittest.TestCase):
