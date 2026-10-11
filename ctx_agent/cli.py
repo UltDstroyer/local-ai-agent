@@ -202,14 +202,14 @@ def _show_pending_deviation(path, *, remote, scope, plan_id=""):
 def _follow_approved_plan(path, plan, *, remote):
     pid = plan.get("id", "")
     scope = plan.get("target" if remote else "project", "")
-    if not pid or not scope:
+    if not scope:
         return
     last = None
     while True:
         progress_payload = {
             "op": "remote_plan_progress" if remote else "plan_progress",
             "target" if remote else "project": scope,
-            "id": pid,
+            **({"id": pid} if pid else {}),
         }
         snapshot = call(path, progress_payload, timeout=15)["progress"]
         key = (
