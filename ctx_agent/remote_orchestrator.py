@@ -233,6 +233,36 @@ ports, paths, CIDRs, or wildcard domains in allowed_domains. The owner will
 review the resulting authority before execution."""
 
 
+def _remote_admin_final_reconcile_prompt(
+    plan: RemotePlan,
+    concerns: list[str],
+    target: RemoteTarget,
+    inspection: str,
+) -> str:
+    return f"""You are Qwen, the manager. Codex reviewed the narrowed remote
+contract and raised the concerns below. Revise the contract only as much as
+needed to make the plan technically viable while preserving the owner's
+authority boundary. Do not execute anything. Return the complete remote plan
+JSON only.
+
+Current plan:
+{json.dumps(plan.to_dict())[:16000]}
+
+Target:
+{json.dumps(target.to_dict())}
+
+Codex concerns:
+{json.dumps(concerns)[:6000]}
+
+Fresh inspection:
+{inspection[:12000]}
+
+Do not hide new authority inside the revision. New packages, services, sudo,
+network access, remote-admin authority, and write paths must remain visible in
+the contract and will still be subject to their normal owner gates during
+execution. Do not add speculative authority merely to satisfy Codex."""
+
+
 def _agreement_prompt(plan: RemotePlan) -> str:
     return f"""The local administrator narrowed our SSH project contract. Do not execute
 anything. Review whether the plan remains technically viable and minimal.
@@ -407,25 +437,67 @@ def create_remote_plan(
     if progress:
         progress(3, list(plan.milestones))
 
-    agreement = bridge_call(
-        settings.codex_bridge_socket,
-        {
-            "op": "consult",
-            "cwd": str(context_dir),
-            "thread_id": codex.get("thread_id", ""),
-            "prompt": _agreement_prompt(plan),
-            "timeout": 600,
-        },
-        timeout=630,
-    )
-    if not agreement.get("ok"):
-        raise RemoteOrchestrationError("Codex could not review remote contract")
-    agreed = _json_object(agreement.get("message", ""))
-    if agreed.get("agreement") is not True:
-        concerns = agreed.get("concerns", [])
-        raise RemoteOrchestrationError(
-            "Codex and administrator did not agree on a viable remote plan: "
-            + "; ".join(str(x) for x in concerns)[:3000]
+    agreed = None
+    for round_number in range(2):
+        agreement = bridge_call(
+            settings.codex_bridge_socket,
+            {
+                "op": "consult",
+                "cwd": str(context_dir),
+                "thread_id": codex.get("thread_id", ""),
+                "prompt": _agreement_prompt(plan),
+                "timeout": 600,
+            },
+            timeout=630,
+        )
+        if not agreement.get("ok"):
+            raise RemoteOrchestrationError(
+                "Codex could not review the remote contract"
+            )
+        agreed = _json_object(agreement.get("message", ""))
+        if agreed.get("agreement") is True:
+            break
+        concerns = agreed.get("concerns")
+        if not isinstance(concerns, list) or not concerns:
+            raise RemoteOrchestrationError(
+                "Codex rejected the remote contract without actionable concerns"
+            )
+        if round_number == 1:
+            raise RemoteOrchestrationError(
+                "Codex and Qwen could not agree on a minimal viable remote "
+                "contract after bounded negotiation"
+            )
+        revised = _ask_json_object(
+            settings,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Return strict JSON only. Revise the remote contract as "
+                        "the manager without executing anything."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": _remote_admin_final_reconcile_prompt(
+                        plan,
+                        [str(x) for x in concerns],
+                        target,
+                        inspection.get("output", ""),
+                    ),
+                },
+            ],
+            mode,
+            num_predict=3072,
+            num_ctx=8192,
+        )
+        plan = _validated_remote_plan(
+            settings,
+            revised,
+            target,
+            pid,
+            goal,
+            mode,
         )
 
     stored = plan.to_dict()
