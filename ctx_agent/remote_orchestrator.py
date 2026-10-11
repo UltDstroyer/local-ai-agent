@@ -58,6 +58,44 @@ def _json_object(text: str) -> dict:
     raise RemoteContractError("model did not return a JSON object")
 
 
+def _ask_json_object(
+    settings,
+    messages: list[dict],
+    mode: str,
+    *,
+    num_predict: int = 3072,
+    num_ctx: int = 8192,
+) -> dict:
+    """Ask Ollama for a structured object, retrying once on malformed/truncated JSON."""
+    last_error = None
+    for attempt in range(2):
+        attempt_messages = [dict(message) for message in messages]
+        if attempt:
+            if attempt_messages and attempt_messages[0].get("role") == "system":
+                attempt_messages[0]["content"] = (
+                    str(attempt_messages[0].get("content", ""))
+                    + " The previous generation was malformed or truncated. "
+                    "Return a complete, concise JSON object with every required field."
+                )
+        response = ask(
+            settings,
+            attempt_messages,
+            "balanced" if mode == "quiet" else mode,
+            tools=[],
+            json_mode=True,
+            num_predict=num_predict,
+            num_ctx=num_ctx,
+        )
+        try:
+            return _json_object(str(response.get("content", "")))
+        except RemoteContractError as exc:
+            last_error = exc
+    raise RemoteContractError(
+        "model failed to return complete valid JSON after one retry: "
+        + str(last_error)
+    )
+
+
 def _remote_context_dir(settings, pid: str) -> Path:
     if settings.workspaces_dir is None:
         raise RemoteOrchestrationError("workspace directory is unavailable")
@@ -245,7 +283,7 @@ def create_remote_plan(
     if progress:
         progress(2, candidate.get("milestones", []))
 
-    admin_message = ask(
+    admin = _ask_json_object(
         settings,
         [
             {
@@ -265,11 +303,10 @@ def create_remote_plan(
                 ),
             },
         ],
-        "balanced" if mode == "quiet" else mode,
-        tools=[],
-        json_mode=True,
+        mode,
+        num_predict=3072,
+        num_ctx=8192,
     )
-    admin = _json_object(str(admin_message.get("content", "")))
     plan = RemotePlan.from_dict(admin, target.name, pid)
     if progress:
         progress(3, list(plan.milestones))
