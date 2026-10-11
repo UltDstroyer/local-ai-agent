@@ -977,6 +977,12 @@ class Coordinator:
                 self.shutdown.wait(1)
 
     def _prepare_remote_recovery_plan(self, failed: dict) -> dict | None:
+        if failed.get("status") == "cancelled":
+            if any(
+                event.get("event") == "remote_plan_cancelled_by_owner"
+                for event in self.remote_store.events(failed["id"])
+            ):
+                return None
         context = dict(failed.get("context", {}))
         existing = str(context.get("recovery_plan_id", "")).strip()
         if existing:
@@ -1039,6 +1045,12 @@ class Coordinator:
         return self.remote_store.get_plan(row["id"])
 
     def _prepare_local_recovery_plan(self, failed: dict) -> dict | None:
+        if failed.get("status") == "cancelled":
+            if any(
+                event.get("event") == "plan_cancelled_by_owner"
+                for event in self.store.events(failed["id"])
+            ):
+                return None
         context = dict(failed.get("context", {}))
         existing = str(context.get("recovery_plan_id", "")).strip()
         if existing:
@@ -1095,6 +1107,22 @@ class Coordinator:
                     continue
                 row = self.remote_store.next_plan()
                 if not row:
+                    failed = next((
+                        item for item in self.remote_store.list_plans(limit=30)
+                        if item.get("status") == "failed_internal"
+                        and not str(
+                            (item.get("context") or {}).get("recovery_plan_id", "")
+                        ).strip()
+                    ), None)
+                    if failed:
+                        try:
+                            self._prepare_remote_recovery_plan(failed)
+                        except Exception as exc:
+                            self.remote_store.event(
+                                failed["id"],
+                                "remote_recovery_plan_preparation_failed",
+                                str(exc)[:1200],
+                            )
                     self.shutdown.wait(0.75)
                     continue
                 try:
@@ -1301,6 +1329,22 @@ class Coordinator:
                     continue
                 row = self.store.next_plan()
                 if not row:
+                    failed = next((
+                        item for item in self.store.list_plans(limit=30)
+                        if item.get("status") == "failed_internal"
+                        and not str(
+                            (item.get("context") or {}).get("recovery_plan_id", "")
+                        ).strip()
+                    ), None)
+                    if failed:
+                        try:
+                            self._prepare_local_recovery_plan(failed)
+                        except Exception as exc:
+                            self.store.event(
+                                failed["id"],
+                                "recovery_plan_preparation_failed",
+                                str(exc)[:1200],
+                            )
                     self.shutdown.wait(0.75)
                     continue
                 try:
