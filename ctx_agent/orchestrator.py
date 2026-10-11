@@ -443,6 +443,81 @@ Rules:
 """
 
 
+def _codex_manager_checkin_local(
+    settings,
+    plan: Plan,
+    milestone: str,
+    workspace: Path,
+    codex_thread: str,
+    codex_message: str,
+    report: dict,
+    patch: str,
+    manager_review: dict,
+) -> dict:
+    """Let Codex challenge Qwen's assessment before the owner is interrupted."""
+    prompt = f"""You are Codex, the senior technical engineer. Qwen is your manager.
+Review Qwen's assessment before anything is escalated to the owner.
+
+Project goal:
+{plan.goal}
+
+Milestone:
+{milestone}
+
+Approved plan:
+{json.dumps(plan.to_dict())[:12000]}
+
+Your latest report:
+{codex_message[:7000]}
+
+Observed mutation report:
+{json.dumps(report)}
+
+Diff excerpt:
+{patch[:10000]}
+
+Qwen manager assessment:
+{json.dumps(manager_review)}
+
+Return JSON only:
+{{
+  "agreement": true,
+  "better_strategy": "",
+  "guidance_to_manager": "",
+  "owner_needed": false,
+  "owner_request": "",
+  "risk": "low|medium|high"
+}}
+
+Prefer solving technical problems with Qwen internally. If you have a better
+technical route, set agreement=false and explain it. Escalate only for new
+authority, dependency/config/network approval, a credential/human-only input,
+or a real human preference. Never ask the owner for something you can inspect.
+"""
+    reply = bridge_call(
+        settings.codex_bridge_socket,
+        {
+            "op": "consult",
+            "cwd": str(workspace),
+            "thread_id": codex_thread,
+            "prompt": prompt,
+            "timeout": 700,
+        },
+        timeout=730,
+    )
+    if not reply.get("ok"):
+        return {"agreement": True, "owner_needed": manager_review.get("owner_needed", False)}
+    try:
+        value = _json_object(reply.get("message", ""))
+    except Exception:
+        return {"agreement": True, "owner_needed": manager_review.get("owner_needed", False)}
+    value["owner_needed"] = value.get("owner_needed") is True
+    value["owner_request"] = str(value.get("owner_request", "")).strip()[:500]
+    risk = str(value.get("risk", "medium")).lower()
+    value["risk"] = risk if risk in ("low", "medium", "high") else "medium"
+    return value
+
+
 def _admin_review(settings, plan: Plan, milestone: str, codex_message: str,
                   report: dict, patch: str, context: dict, mode: str) -> dict:
     prompt = f"""You are the ctx-agent administrator supervising Codex. Determine whether
@@ -732,6 +807,41 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
         context,
         mode,
     )
+    checkin = _codex_manager_checkin_local(
+        settings,
+        plan,
+        plan.milestones[index],
+        workspace,
+        row.get("codex_thread", ""),
+        reply.get("message", ""),
+        report.to_dict(),
+        patch,
+        review,
+    )
+    store.event(
+        plan.id,
+        "codex_manager_checkin",
+        json.dumps({
+            "agreement": checkin.get("agreement"),
+            "owner_needed": checkin.get("owner_needed"),
+            "risk": checkin.get("risk"),
+        })[:1200],
+    )
+    if checkin.get("agreement") is False and checkin.get("better_strategy"):
+        review["state"] = "continue"
+        review["owner_needed"] = False
+        review["owner_request"] = ""
+        review["guidance"] = str(
+            checkin.get("guidance_to_manager") or checkin.get("better_strategy")
+        )[:3000]
+        review["reason"] = (
+            "Codex proposed a stronger technical approach during manager check-in."
+        )
+    elif checkin.get("owner_needed") is True:
+        review["owner_needed"] = True
+        if checkin.get("owner_request"):
+            review["owner_request"] = checkin["owner_request"]
+        review["risk"] = checkin.get("risk", review.get("risk", "medium"))
     updated_context = _append_context(
         context,
         str(review.get("context_note", "")),
