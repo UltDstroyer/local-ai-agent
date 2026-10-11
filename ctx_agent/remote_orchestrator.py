@@ -3265,7 +3265,22 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
     context = dict(current_row.get("context", {}))
     if request_type in ("dependency_install", "service_activation"):
         approved_dependencies = list(context.get("approved_dependencies", []))
-        dependency_key = str(request.get("dependency_key", "")).strip()
+        proposed_action = request.get("proposed_action")
+        derived_dependency_key = (
+            _dependency_key(proposed_action)
+            if isinstance(proposed_action, dict)
+            else None
+        )
+        stored_dependency_key = str(request.get("dependency_key", "")).strip()
+        if (
+            stored_dependency_key
+            and derived_dependency_key
+            and stored_dependency_key != derived_dependency_key
+        ):
+            raise RemoteOrchestrationError(
+                "dependency deviation identity does not match its exact action"
+            )
+        dependency_key = stored_dependency_key or derived_dependency_key or ""
         if dependency_key and dependency_key not in approved_dependencies:
             approved_dependencies.append(dependency_key)
         context["approved_dependencies"] = approved_dependencies[-50:]
