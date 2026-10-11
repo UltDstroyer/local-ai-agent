@@ -15,6 +15,7 @@ from .codex_bridge import BridgeError
 from .contracts import ContractError, Plan, analyze_changes, contract_violations
 from .manager_brief import manager_deviation_brief
 from .governance import (
+    owner_decision_key,
     valid_local_owner_request,
     valid_remote_owner_request,
 )
@@ -996,31 +997,60 @@ class Coordinator:
                             missing = next((key for key in available if key not in live), "")
                             metadata = dict(context.get("input_requests", {})).get(missing, {})
                             if missing:
-                                self.remote_store.create_deviation(
-                                    row["id"],
-                                    row["target"],
-                                    "Qwen needs one previously supplied ephemeral input again",
-                                    {
-                                        "type": "human_input_refresh",
-                                        "boss_request": (
-                                            "Allow me to ask you to re-enter one "
-                                            "ephemeral input that was lost after restart."
-                                        ),
-                                        "risk": "low",
-                                        "input_request": {
-                                            "key": missing,
-                                            "prompt": str(metadata.get("prompt", f"Re-enter {missing}"))[:300],
-                                            "reason": str(metadata.get(
-                                                "reason",
-                                                "The coordinator restarted, so the value is no longer in memory."
-                                            ))[:600],
-                                            "sensitive": metadata.get("sensitive") is True,
-                                        },
-                                        "suggested_action": (
-                                            "Re-enter only this value; no new authority is requested."
-                                        ),
+                                refresh_request = {
+                                    "type": "human_input_refresh",
+                                    "boss_request": (
+                                        "Allow me to ask you to re-enter one "
+                                        "ephemeral input that was lost after restart."
+                                    ),
+                                    "risk": "low",
+                                    "input_request": {
+                                        "key": missing,
+                                        "prompt": str(metadata.get("prompt", f"Re-enter {missing}"))[:300],
+                                        "reason": str(metadata.get(
+                                            "reason",
+                                            "The coordinator restarted, so the value is no longer in memory."
+                                        ))[:600],
+                                        "sensitive": metadata.get("sensitive") is True,
                                     },
-                                )
+                                    "suggested_action": (
+                                        "Re-enter only this value; no new authority is requested."
+                                    ),
+                                }
+                                decision_key = owner_decision_key(refresh_request)
+                                rejected = set(context.get("rejected_owner_decisions", []))
+                                if decision_key and decision_key in rejected:
+                                    context["next_guidance"] = (
+                                        "The owner already rejected re-entering this "
+                                        "human input. Do not ask again. Replan without "
+                                        "that value or stop cleanly."
+                                    )
+                                    context["available_inputs"] = [
+                                        item for item in context.get("available_inputs", [])
+                                        if item != missing
+                                    ]
+                                    context["expired_inputs"] = [
+                                        item for item in context.get("expired_inputs", [])
+                                        if item != missing
+                                    ]
+                                    self.remote_store.update_plan(
+                                        row["id"],
+                                        status="approved",
+                                        attempts=0,
+                                        context=context,
+                                    )
+                                    self.remote_store.event(
+                                        row["id"],
+                                        "remote_rejected_owner_decision_not_reasked",
+                                        decision_key,
+                                    )
+                                else:
+                                    self.remote_store.create_deviation(
+                                        row["id"],
+                                        row["target"],
+                                        "Qwen needs one previously supplied ephemeral input again",
+                                        refresh_request,
+                                    )
                             else:
                                 self.remote_store.update_plan(
                                     row["id"],
