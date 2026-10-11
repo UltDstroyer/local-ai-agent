@@ -710,6 +710,17 @@ def _internal_recovery_cycle(
     return False
 
 
+def _reset_local_transient_recovery(context: dict) -> dict:
+    value = dict(context)
+    for key in (
+        "manager_recovery_cycles",
+        "manager_review_recoveries",
+        "worker_internal_recoveries",
+    ):
+        value.pop(key, None)
+    return value
+
+
 def _append_context(context: dict, note: str, codex_message: str) -> dict:
     value = dict(context) if isinstance(context, dict) else {}
     history = list(value.get("history", []))
@@ -1079,6 +1090,7 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
         completed = index + 1
         save_checkpoint(settings, workspace, plan.id, completed)
         updated_context["next_guidance"] = ""
+        updated_context = _reset_local_transient_recovery(updated_context)
         store.update_plan(
             plan.id,
             status="approved",
