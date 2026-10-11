@@ -96,6 +96,75 @@ def _ask_json_object(
     )
 
 
+def summarize_remote_deviation(settings, deviation: dict, mode: str) -> dict:
+    """Return a short owner-facing Qwen summary with a safe deterministic fallback."""
+    request = deviation.get("request") if isinstance(deviation, dict) else {}
+    if not isinstance(request, dict):
+        request = {}
+    compact_results = []
+    for item in (request.get("results") or [])[-3:]:
+        if not isinstance(item, dict):
+            continue
+        action = item.get("action") if isinstance(item.get("action"), dict) else {}
+        compact_results.append({
+            "op": action.get("op"),
+            "ok": item.get("ok"),
+            "returncode": item.get("returncode"),
+            "output_tail": str(item.get("output", ""))[-1200:],
+        })
+    source = {
+        "id": deviation.get("id"),
+        "reason": str(deviation.get("reason", ""))[:500],
+        "type": request.get("type"),
+        "milestone": str(request.get("milestone", ""))[:500],
+        "suggested_action": str(request.get("suggested_action", ""))[:700],
+        "results": compact_results,
+    }
+    try:
+        summary = _ask_json_object(
+            settings,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Return strict JSON only. Summarize an SSH-agent deviation "
+                        "for the owner in plain language. Be concise and decision-oriented."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Summarize this deviation without dumping commands or logs. "
+                        "Explain what happened, whether any useful work succeeded, "
+                        "why owner input is needed, and the safest next choice. "
+                        "Use at most two short sentences for summary and one short "
+                        "sentence for recommendation. Return exactly: "
+                        '{"summary":"...","recommendation":"...","risk":"low|medium|high"}.\n'
+                        + json.dumps(source)
+                    ),
+                },
+            ],
+            mode,
+            num_predict=450,
+            num_ctx=4096,
+        )
+        return {
+            "summary": str(summary.get("summary", ""))[:500],
+            "recommendation": str(summary.get("recommendation", ""))[:300],
+            "risk": str(summary.get("risk", "unknown"))[:20],
+        }
+    except Exception:
+        reason = str(deviation.get("reason", "Remote work needs owner attention"))
+        recommendation = str(
+            request.get("suggested_action", "Review the deviation before continuing.")
+        )
+        return {
+            "summary": reason[:500],
+            "recommendation": recommendation[:300],
+            "risk": "unknown",
+        }
+
+
 def _remote_context_dir(settings, pid: str) -> Path:
     if settings.workspaces_dir is None:
         raise RemoteOrchestrationError("workspace directory is unavailable")
@@ -196,7 +265,9 @@ so make this authority obvious in risks and keep commands on-task.
 
 Keep ordinary typed permissions narrow. Sudo, package installation, public
 network access, remote-admin authority, and write paths must be visible in the
-contract whenever required. Never include secret values in the plan."""
+contract whenever required. Never include secret values in the plan.
+Owner-facing text must stay concise: goal <= 180 characters, each milestone <=
+120 characters, and each risk/assumption/verification item <= 160 characters."""
 
 
 def _admin_reconcile_prompt(
@@ -226,7 +297,8 @@ allow_remote_admin=true is permitted and should prevent avoidable manual
 handoffs. It grants arbitrary commands only on the named SSH target and never
 on the desktop. Keep destructive actions tied directly to the stated goal,
 preserve SSH reachability until replacement access is verified, and never
-request or embed secret values. In remote_budget.allowed_domains, use exact
+request or embed secret values. Keep owner-facing goal/milestone/risk text
+concise even when the internal contract is detailed. In remote_budget.allowed_domains, use exact
 bare hostnames only, for example pkg.cloudflare.com. Do not put URLs, schemes,
 ports, paths, CIDRs, or wildcard domains in allowed_domains. The owner will
 review the resulting authority before execution."""
