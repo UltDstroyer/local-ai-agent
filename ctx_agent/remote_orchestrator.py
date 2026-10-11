@@ -1169,6 +1169,73 @@ def _auto_expand_execution_budget(
     return updated, context
 
 
+def _manager_dependency_review(
+    settings,
+    plan: RemotePlan,
+    milestone: str,
+    action: dict,
+    proposal: dict,
+    inspection: str,
+    mode: str,
+) -> dict:
+    """Qwen verifies that Codex's proposed dependency is actually necessary."""
+    prompt = f"""You are Qwen, the manager. Codex proposes adding or activating a
+dependency that would require boss approval. Before interrupting the boss,
+decide whether the dependency is genuinely necessary for the current milestone
+or whether Codex should use an existing supported route inside current authority.
+
+Goal: {plan.goal}
+Milestone: {milestone}
+Proposed dependency action: {json.dumps(action)}
+Codex summary: {str(proposal.get("summary", ""))[:5000]}
+Approved authority: {json.dumps(plan.budget.to_dict())}
+Fresh inspection: {inspection[:14000]}
+
+Return JSON only:
+{{
+  "needed": true,
+  "reason": "why this exact dependency is or is not necessary",
+  "guidance": "what Codex should do next if it is not necessary"
+}}
+
+Do not approve the dependency yourself. If needed=true, the boss must still
+approve it. Prefer an existing supported approach when it is technically sound.
+"""
+    try:
+        value = _ask_json_object(
+            settings,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Return strict JSON only. You are reviewing dependency "
+                        "necessity, not granting authority."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "balanced" if mode == "quiet" else mode,
+            num_predict=768,
+            num_ctx=6144,
+        )
+        return {
+            "needed": value.get("needed") is True,
+            "reason": str(value.get("reason", "")).strip()[:1600],
+            "guidance": str(value.get("guidance", "")).strip()[:2400],
+            "internal_error": False,
+        }
+    except Exception as exc:
+        return {
+            "needed": False,
+            "reason": "manager dependency review failed: " + str(exc)[:1000],
+            "guidance": (
+                "Retry the internal dependency-necessity review before asking "
+                "the owner."
+            ),
+            "internal_error": True,
+        }
+
+
 def _dependency_request_from_checkin(
     plan: RemotePlan,
     dependency: object,
@@ -1184,6 +1251,7 @@ def _dependency_request_from_checkin(
             plan,
             action,
             {"summary": reason},
+            plan.milestones[0] if plan.milestones else plan.goal,
         )
         request["milestone"] = plan.milestones[0] if plan.milestones else plan.goal
         return request
@@ -1212,8 +1280,12 @@ def _dependency_key(action: dict) -> str | None:
     return None
 
 
-def _dependency_owner_request(plan: RemotePlan, action: dict, proposal: dict) -> dict:
-    milestone = ""
+def _dependency_owner_request(
+    plan: RemotePlan,
+    action: dict,
+    proposal: dict,
+    milestone: str = "",
+) -> dict:
     summary = str(proposal.get("summary", "")).strip()
     op = action.get("op")
     if op == "package_install":
@@ -1226,7 +1298,8 @@ def _dependency_owner_request(plan: RemotePlan, action: dict, proposal: dict) ->
             "boss_request": f"Allow me to download and install {label}.",
             "risk": "medium",
             "reason": (
-                f"I need {label} for the current milestone: {plan.milestones[0] if plan.milestones else plan.goal}. "
+                f"I need {label} for the current milestone: "
+                f"{milestone or (plan.milestones[0] if plan.milestones else plan.goal)}. "
                 + (summary if summary else "The dependency is not currently available on the target.")
             )[:1800],
             "suggested_action": (
@@ -1242,7 +1315,8 @@ def _dependency_owner_request(plan: RemotePlan, action: dict, proposal: dict) ->
         "boss_request": f"Allow me to {verb} the {service} service.",
         "risk": "medium",
         "reason": (
-            f"I need the {service} service active for the current milestone. "
+            f"I need the {service} service active for the current milestone"
+            f"{': ' + milestone if milestone else ''}. "
             + (summary if summary else "This service is required by the chosen approach.")
         )[:1800],
         "suggested_action": (
@@ -1561,12 +1635,85 @@ def run_remote_plan_step(
     for action in actions:
         dependency_key = _dependency_key(action)
         if dependency_key and dependency_key not in approved_dependencies:
-            request = _dependency_owner_request(plan, action, proposal)
+            dependency_review = _manager_dependency_review(
+                settings,
+                plan,
+                plan.milestones[index],
+                action,
+                proposal,
+                inspection.get("output", ""),
+                mode,
+            )
+            remote_store.event(
+                plan.id,
+                "remote_manager_dependency_review",
+                json.dumps({
+                    "needed": dependency_review.get("needed"),
+                    "internal_error": dependency_review.get("internal_error"),
+                    "reason": dependency_review.get("reason", ""),
+                })[:1600],
+            )
+            if dependency_review.get("internal_error"):
+                recoveries = int(
+                    context.get("dependency_review_recoveries", 0)
+                ) + 1
+                context["dependency_review_recoveries"] = recoveries
+                context["next_guidance"] = dependency_review.get(
+                    "guidance", ""
+                )[:3000]
+                if recoveries <= 3:
+                    remote_store.update_plan(
+                        plan.id,
+                        status="approved",
+                        attempts=0,
+                        context=context,
+                    )
+                else:
+                    remote_store.update_plan(
+                        plan.id,
+                        status="cancelled",
+                        result=(
+                            "Qwen repeatedly failed to review dependency necessity "
+                            "without producing a genuine owner decision."
+                        ),
+                        context=context,
+                    )
+                return
+            if not dependency_review.get("needed"):
+                context["next_guidance"] = (
+                    dependency_review.get("guidance")
+                    or "Choose an approach that stays inside existing authority."
+                )[:3000]
+                context = _append_history(
+                    context,
+                    {
+                        "milestone": index,
+                        "dependency_rejected_by_manager": dependency_key,
+                        "reason": dependency_review.get("reason", ""),
+                    },
+                )
+                remote_store.update_plan(
+                    plan.id,
+                    status="approved",
+                    attempts=0,
+                    context=context,
+                )
+                return
+            request = _dependency_owner_request(
+                plan,
+                action,
+                {
+                    **proposal,
+                    "summary": dependency_review.get("reason")
+                    or proposal.get("summary", ""),
+                },
+                plan.milestones[index],
+            )
             request["milestone"] = plan.milestones[index]
             remote_store.create_deviation(
                 plan.id,
                 plan.target,
-                "Qwen needs approval for a new remote dependency",
+                "Qwen and Codex need approval for a required remote dependency",
                 request,
             )
             return
