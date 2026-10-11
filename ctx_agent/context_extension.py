@@ -58,13 +58,20 @@ SSH targets and remote projects:
 Media:
   ctx agent media record|enroll|narrate|mux ...
 
-Plan creation is read-only. ctx-agent and Codex negotiate a mutation budget,
-then wait for owner approval. Approved plans execute autonomously only in
-maximum mode. Codex may ask Qwen for narrow scope expansion; Qwen can approve
-reasonable typed expansions and escalates high-risk or ambiguous requests to
-the owner. Approval terminals stream progress and print owner deviations as
-soon as they occur. Codex/ChatGPT authentication stays in the desktop user's
-own Codex storage.
+Plan creation is read-only. Codex is the senior technical engineer and Qwen is
+the manager: they negotiate plans, check in during execution, challenge weak
+approaches, and replan together before involving the owner. Approved plans
+execute autonomously only in maximum mode.
+
+Qwen handles technical diagnosis, retries, formatting/schema repair, inspectable
+machine state, and bounded bookkeeping internally. New packages, first service
+mutations, critical remote-admin actions, credentials/human-only inputs, and
+other genuine authority or preference changes require one concrete owner
+decision. Human-only inputs are requested one at a time after the related
+deviation is approved. Approval terminals stream progress and surface only
+manager-filtered owner decisions. Explicit events/logs commands remain the
+diagnostic escape hatch. Codex/ChatGPT authentication stays in the desktop
+user's own Codex storage.
 """
 
 
