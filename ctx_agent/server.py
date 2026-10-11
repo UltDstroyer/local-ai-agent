@@ -84,6 +84,7 @@ class Coordinator:
         self.lock = threading.RLock()
         self.execution_lock = threading.RLock()
         self.planning_progress = {}
+        self.remote_inputs: dict[str, dict[str, str]] = {}
 
     def project(self, name):
         return project_path(self.settings.projects_dir, name)
@@ -394,6 +395,38 @@ class Coordinator:
                 )
             }
 
+        if op == "remote_input_submit":
+            did = data.get("id", "")
+            key = data.get("key", "")
+            supplied = data.get("value", "")
+            if not isinstance(did, str) or len(did) != 12 or not did.isalnum():
+                raise ValueError("Invalid remote deviation identifier")
+            if not isinstance(key, str) or not key or len(key) > 64:
+                raise ValueError("Invalid input key")
+            if not isinstance(supplied, str) or not supplied or len(supplied) > 8192:
+                raise ValueError("Human input must be 1 to 8192 characters")
+            deviation = self.remote_store.get_deviation(did)
+            if not deviation or deviation.get("status") != "pending":
+                raise ValueError("No pending deviation for this input")
+            request = deviation.get("request") or {}
+            expected = request.get("input_request") or {}
+            if expected.get("key") != key:
+                raise ValueError("Input key does not match this deviation")
+            pid = deviation["plan"]
+            self.remote_inputs.setdefault(pid, {})[key] = supplied
+            row = self.remote_store.get_plan(pid)
+            context = dict(row.get("context", {}))
+            available = list(context.get("available_inputs", []))
+            if key not in available:
+                available.append(key)
+            context["available_inputs"] = available[-20:]
+            self.remote_store.update_plan(pid, context=context)
+            self.remote_store.event(pid, "remote_human_input_received", key)
+            plan = approve_remote_deviation(
+                self.settings, self.remote_store, did
+            )
+            return {"plan": self._remote_plan_view(plan)}
+
         if op == "remote_deviation_list":
             return {
                 "deviations": self.remote_store.list_deviations(
@@ -419,6 +452,12 @@ class Coordinator:
                     ),
                 }
             if op == "remote_deviation_approve":
+                input_request = (deviation.get("request") or {}).get("input_request")
+                if isinstance(input_request, dict):
+                    return {
+                        "input_request": input_request,
+                        "deviation": did,
+                    }
                 return {
                     "plan": approve_remote_deviation(
                         self.settings, self.remote_store, did
@@ -708,6 +747,7 @@ class Coordinator:
                             self.remote_store,
                             row,
                             self.mode,
+                            inputs=dict(self.remote_inputs.get(row["id"], {})),
                         )
                 except Exception as exc:
                     current = self.remote_store.get_plan(row["id"])
