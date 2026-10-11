@@ -70,41 +70,53 @@ def _progress_line(progress):
     return f"[Qwen manager] {prefix}{stage}{pct} · elapsed {elapsed} · {eta}"
 
 
-def _print_progress_report(progress):
-    print("[Qwen manager] progress")
-    print(f"  phase: {progress.get('phase', 'unknown')}")
+def _print_progress_report(progress, *, file=None):
+    file = sys.stdout if file is None else file
+    print("[Qwen manager] progress", file=file)
+    print(f"  phase: {progress.get('phase', 'unknown')}", file=file)
     if progress.get("current_stage_name"):
         index = progress.get("current_stage_index")
         count = progress.get("stage_count")
         position = f"{index}/{count} " if index and count else ""
-        print(f"  current stage: {position}{progress['current_stage_name']}")
+        print(f"  current stage: {position}{progress['current_stage_name']}", file=file)
     if isinstance(progress.get("percent_complete"), int):
-        print(f"  progress: {progress['percent_complete']}%")
-    print(f"  elapsed: {_duration(progress.get('elapsed_seconds'))}")
+        print(f"  progress: {progress['percent_complete']}%", file=file)
+    print(f"  elapsed: {_duration(progress.get('elapsed_seconds'))}", file=file)
     remaining = progress.get("estimated_remaining_seconds")
     work = progress.get("estimated_work_remaining_seconds")
     if remaining is not None:
-        print(f"  estimated time left: ~{_duration(remaining)}")
+        print(f"  estimated time left: ~{_duration(remaining)}", file=file)
     elif work is not None:
-        print(f"  estimated work left: ~{_duration(work)}")
+        print(f"  estimated work left: ~{_duration(work)}", file=file)
     if progress.get("waiting_on"):
-        print("  waiting on:", progress["waiting_on"].replace("_", " "))
+        print("  waiting on:", progress["waiting_on"].replace("_", " "), file=file)
     stages = progress.get("stages") or progress.get("planning_stages") or []
     if stages:
-        print("  stages:")
-        labels = {"complete": "done", "running": "active", "queued": "queued", "pending": "pending"}
+        print("  stages:", file=file)
+        labels = {
+            "complete": "done",
+            "running": "active",
+            "queued": "queued",
+            "pending": "pending",
+        }
         for stage in stages:
-            status = labels.get(stage.get("status"), stage.get("status", "pending"))
+            status = labels.get(
+                stage.get("status"),
+                stage.get("status", "pending"),
+            )
             estimate = stage.get("estimated_seconds")
             suffix = f" (~{_duration(estimate)})" if estimate is not None else ""
-            print(f"  [{status}] {stage.get('index')}. {stage.get('name')}{suffix}")
+            print(
+                f"  [{status}] {stage.get('index')}. {stage.get('name')}{suffix}",
+                file=file,
+            )
     planned = progress.get("planned_execution_stages") or []
     if planned and not progress.get("stages"):
-        print("  planned execution stages:")
+        print("  planned execution stages:", file=file)
         for index, name in enumerate(planned, 1):
-            print(f"  {index}. {name}")
+            print(f"  {index}. {name}", file=file)
     if progress.get("estimate_note"):
-        print("  estimate:", progress["estimate_note"])
+        print("  estimate:", progress["estimate_note"], file=file)
 
 
 def _call_with_progress(path, payload, progress_payload, timeout):
@@ -379,6 +391,7 @@ def _follow_approved_plan(path, plan, *, remote):
     if not scope:
         return
     last = None
+    last_report = None
     while True:
         progress_payload = {
             "op": "remote_plan_progress" if remote else "plan_progress",
@@ -392,7 +405,21 @@ def _follow_approved_plan(path, plan, *, remote):
             snapshot.get("percent_complete"),
             snapshot.get("waiting_on"),
         )
-        if key != last:
+        report_key = (
+            snapshot.get("phase"),
+            snapshot.get("current_stage_index"),
+            tuple(
+                (stage.get("index"), stage.get("status"))
+                for stage in (snapshot.get("stages") or [])
+            ),
+        )
+        if report_key != last_report:
+            if last_report is not None:
+                print("", file=sys.stderr)
+            _print_progress_report(snapshot, file=sys.stderr)
+            last_report = report_key
+            last = key
+        elif key != last:
             print(_progress_line(snapshot), file=sys.stderr, flush=True)
             last = key
         phase = snapshot.get("phase")
