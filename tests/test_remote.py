@@ -733,7 +733,7 @@ class RemoteDependencyApprovalTests(unittest.TestCase):
             "service": "cloudflared.service",
             "action": "enable_now",
         }
-        self.assertEqual(_dependency_key(action), "service:cloudflared")
+        self.assertEqual(_dependency_key(action), "service:cloudflared:persistent")
         request = _dependency_owner_request(
             plan,
             action,
