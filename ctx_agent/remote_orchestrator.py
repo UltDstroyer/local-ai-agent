@@ -1300,6 +1300,23 @@ def _critical_exec_key(action: dict) -> str:
     ).hexdigest()[:32]
 
 
+def _owner_action_key(action: dict) -> str:
+    normalized = dict(action) if isinstance(action, dict) else {}
+    op = normalized.get("op")
+    if op == "write_file":
+        normalized.setdefault("mode", "0644")
+    elif op == "ensure_dir":
+        normalized.setdefault("mode", "0755")
+    elif op == "remote_exec":
+        normalized.setdefault("as_root", False)
+        normalized.setdefault("timeout", 900)
+    elif op == "package_install" and isinstance(normalized.get("packages"), list):
+        normalized["packages"] = sorted(normalized["packages"])
+    return hashlib.sha256(
+        json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:32]
+
+
 def _manager_critical_exec_review(
     settings,
     plan: RemotePlan,
@@ -1972,10 +1989,12 @@ def run_remote_plan_step(
             return
 
     validated = []
-    approved_dependencies = set(context.get("approved_dependencies", []))
+    approved_action_leases = set(context.get("approved_action_leases", []))
     approved_critical_execs = set(context.get("approved_critical_execs", []))
     critical_batch_seen = set()
     for action in actions:
+        owner_action_key = _owner_action_key(action)
+        owner_action_approved = owner_action_key in approved_action_leases
         critical_key = None
         critical_approved = False
         if isinstance(action, dict) and action.get("op") == "remote_exec":
@@ -2103,7 +2122,7 @@ def run_remote_plan_step(
                     )
                     return
         dependency_key = _dependency_key(action)
-        if dependency_key and dependency_key not in approved_dependencies:
+        if dependency_key and not owner_action_approved:
             dependency_review = _manager_dependency_review(
                 settings,
                 plan,
@@ -2208,9 +2227,14 @@ def run_remote_plan_step(
             )
             return
         try:
+            validation_plan = (
+                _amend_budget_for_action(plan, action)
+                if owner_action_approved
+                else plan
+            )
             checked = validate_remote_action(
                 action,
-                plan.budget,
+                validation_plan.budget,
                 allow_critical_remote_exec=critical_approved,
             )
         except RemoteContractError as exc:
@@ -2427,6 +2451,25 @@ def run_remote_plan_step(
     results = []
     mutations = list(row.get("mutations", []))
     for action in validated:
+        action_lease_key = _owner_action_key(action)
+        owner_action_approved = action_lease_key in approved_action_leases
+        execution_plan = (
+            _amend_budget_for_action(plan, action)
+            if owner_action_approved
+            else plan
+        )
+        if owner_action_approved:
+            approved_action_leases.remove(action_lease_key)
+            context["approved_action_leases"] = sorted(
+                approved_action_leases
+            )[-50:]
+            remote_store.update_plan(plan.id, context=context)
+            remote_store.event(
+                plan.id,
+                "remote_owner_action_lease_consumed",
+                action_lease_key,
+            )
+
         critical_owner_approved = False
         if action.get("op") == "remote_exec":
             action_key = _critical_exec_key(action)
@@ -2447,7 +2490,7 @@ def run_remote_plan_step(
             {
                 "op": "action",
                 "target": target.to_dict(),
-                "budget": plan.budget.to_dict(),
+                "budget": execution_plan.budget.to_dict(),
                 "action": action,
                 "inputs": inputs,
                 "critical_owner_approved": critical_owner_approved,
@@ -2855,16 +2898,15 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
         current_row["plan"], current_row["target"], current_row["id"]
     )
 
-    if request.get("type") == "remote_scope":
-        action = request.get("proposed_action", {})
-        plan = _amend_budget_for_action(plan, action)
-        remote_store.update_plan(plan.id, plan=plan.to_dict())
+    if request.get("type") in (
+        "remote_scope",
+        "dependency_install",
+        "service_activation",
+        "critical_remote_exec",
+    ):
+        pass
     elif request.get("type") == "manual_required":
         pass
-    elif request.get("type") in ("dependency_install", "service_activation"):
-        action = request.get("proposed_action", {})
-        plan = _amend_budget_for_action(plan, action)
-        remote_store.update_plan(plan.id, plan=plan.to_dict())
     elif request.get("type") == "remote_budget":
         raw = plan.to_dict()
         budget = raw["remote_budget"]
@@ -2882,6 +2924,19 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
         remote_store.update_plan(plan.id, plan=plan.to_dict())
 
     context = dict(current_row.get("context", {}))
+    if request.get("type") in (
+        "remote_scope",
+        "dependency_install",
+        "service_activation",
+        "critical_remote_exec",
+    ):
+        proposed_action = request.get("proposed_action")
+        if isinstance(proposed_action, dict) and proposed_action:
+            action_leases = list(context.get("approved_action_leases", []))
+            lease_key = _owner_action_key(proposed_action)
+            if lease_key not in action_leases:
+                action_leases.append(lease_key)
+            context["approved_action_leases"] = action_leases[-50:]
     if request.get("type") == "critical_remote_exec":
         approved_critical_execs = list(
             context.get("approved_critical_execs", [])
@@ -2890,12 +2945,6 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
         if critical_key and critical_key not in approved_critical_execs:
             approved_critical_execs.append(critical_key)
         context["approved_critical_execs"] = approved_critical_execs[-30:]
-    if request.get("type") in ("dependency_install", "service_activation"):
-        approved_dependencies = list(context.get("approved_dependencies", []))
-        dependency_key = str(request.get("dependency_key", "")).strip()
-        if dependency_key and dependency_key not in approved_dependencies:
-            approved_dependencies.append(dependency_key)
-        context["approved_dependencies"] = approved_dependencies[-50:]
     if request.get("type") == "manual_required":
         context["next_guidance"] = (
             "Owner handled or accepted the manual dependency. Re-inspect the "
