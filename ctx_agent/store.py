@@ -386,7 +386,7 @@ class Store:
             status = row["status"]
             if status == "cancelled":
                 owner_cancel = self.db.execute(
-                    "SELECT 1 FROM plan_events WHERE plan=? "
+                    "SELECT 1 FROM events WHERE job=? "
                     "AND event='plan_cancelled_by_owner' LIMIT 1",
                     (pid,),
                 ).fetchone()
