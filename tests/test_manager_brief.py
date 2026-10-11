@@ -8,7 +8,7 @@ from contextlib import redirect_stderr
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from ctx_agent.cli import _print_live_deviation, _prompt_human_input
+from ctx_agent.cli import _follow_approved_plan, _print_live_deviation, _prompt_human_input
 from ctx_agent.manager_brief import manager_deviation_brief
 
 
@@ -182,6 +182,54 @@ class PlainBossRequestTests(unittest.TestCase):
         self.assertIsInstance(brief["request"], str)
         self.assertNotIn("{", brief["request"])
         self.assertNotIn("cloudflared_status", brief["request"])
+
+
+class LiveDeviationWatcherTests(unittest.TestCase):
+    def test_auto_retired_deviation_does_not_stop_live_watcher(self):
+        snapshots = [
+            {
+                "phase": "awaiting_deviation",
+                "current_stage_index": 1,
+                "percent_complete": 50,
+                "waiting_on": "owner_deviation_decision",
+            },
+            {
+                "phase": "running",
+                "current_stage_index": 1,
+                "percent_complete": 50,
+                "waiting_on": None,
+            },
+            {
+                "phase": "awaiting_deviation",
+                "current_stage_index": 1,
+                "percent_complete": 50,
+                "waiting_on": "owner_deviation_decision",
+            },
+        ]
+        calls = {"progress": 0, "show": 0}
+
+        def fake_call(path, payload, timeout=900):
+            if payload["op"] == "remote_plan_progress":
+                idx = min(calls["progress"], len(snapshots) - 1)
+                calls["progress"] += 1
+                return {"progress": snapshots[idx]}
+            raise AssertionError(payload)
+
+        def fake_show(*args, **kwargs):
+            calls["show"] += 1
+            return calls["show"] >= 2
+
+        with patch("ctx_agent.cli.call", side_effect=fake_call), patch(
+            "ctx_agent.cli._show_pending_deviation", side_effect=fake_show
+        ), patch("ctx_agent.cli.time.sleep", return_value=None):
+            _follow_approved_plan(
+                "/tmp/fake.sock",
+                {"id": "plan123", "target": "pi"},
+                remote=True,
+            )
+
+        self.assertEqual(calls["show"], 2)
+        self.assertGreaterEqual(calls["progress"], 3)
 
 
 if __name__ == "__main__":
