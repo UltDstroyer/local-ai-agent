@@ -1294,6 +1294,18 @@ Return JSON only:
         }
 
 
+def _is_permanent_remote_denial(reason: str) -> bool:
+    lower = str(reason).lower()
+    return (
+        "persistent secret content may not be read into agent context" in lower
+        or "environment lookup may expose persistent secrets" in lower
+        or "environment dump may expose persistent secrets" in lower
+        or "shell variable dump may expose persistent secrets" in lower
+        or "process environment dump may expose persistent secrets" in lower
+        or "command would expose persistent secret content" in lower
+    )
+
+
 def _is_remote_action_format_error(reason: str) -> bool:
     lower = str(reason).lower()
     return (
@@ -2534,6 +2546,50 @@ def run_remote_plan_step(
                     status="approved",
                     attempts=min(attempts, plan.budget.max_attempts_per_milestone - 1),
                     context=context,
+                )
+                return
+            if _is_permanent_remote_denial(reason):
+                denials = int(context.get("permanent_policy_denials", 0)) + 1
+                context["permanent_policy_denials"] = denials
+                context["next_guidance"] = (
+                    "Qwen manager correction: this action crosses a permanent "
+                    "security boundary and cannot be approved by the boss. Do not "
+                    "request it again. Use metadata/existence checks, let the "
+                    "remote service consume its own credential file, or request "
+                    "one ephemeral human input if a value is truly required. "
+                    "Policy reason: " + reason
+                )[:3000]
+                context = _append_history(
+                    context,
+                    {
+                        "milestone": index,
+                        "manager_recovery": "permanent_policy_denial",
+                        "reason": reason[:1200],
+                        "action": action if isinstance(action, dict) else {},
+                    },
+                )
+                if denials <= 3:
+                    remote_store.update_plan(
+                        plan.id,
+                        status="approved",
+                        attempts=0,
+                        codex_thread="",
+                        context=context,
+                    )
+                else:
+                    remote_store.update_plan(
+                        plan.id,
+                        status="cancelled",
+                        result=(
+                            "Qwen and Codex repeatedly attempted an action blocked "
+                            "by a permanent security boundary."
+                        ),
+                        context=context,
+                    )
+                remote_store.event(
+                    plan.id,
+                    "remote_permanent_policy_denial",
+                    reason[:1200],
                 )
                 return
             if reason.startswith("unsupported remote action"):
