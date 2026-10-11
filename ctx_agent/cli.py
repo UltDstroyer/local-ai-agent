@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import socket
@@ -147,6 +148,18 @@ def _call_with_progress(path, payload, progress_payload, timeout):
     if "error" in failure:
         raise failure["error"]
     return result["value"]
+
+
+def _prompt_human_input(request):
+    prompt = str(request.get("prompt", "Enter value")).strip() or "Enter value"
+    reason = str(request.get("reason", "")).strip()
+    print("", file=sys.stderr)
+    print("[Qwen manager] I need one input", file=sys.stderr)
+    if reason:
+        print("  reason:", reason, file=sys.stderr)
+    if request.get("sensitive") is True:
+        return getpass.getpass(prompt + ": ")
+    return input(prompt + ": ")
 
 
 def _print_live_deviation(deviation, brief):
