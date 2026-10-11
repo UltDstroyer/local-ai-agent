@@ -919,6 +919,11 @@ secret values or request secrets through chat; use the secure input flow.
                     )
                 raise
             self.remote_store.event(pid, "remote_human_input_received", key)
+            self._record_owner_decision_evidence(
+                outcome="approved",
+                request=request,
+                scope=deviation.get("target", ""),
+            )
             return {"plan": self._remote_plan_view(plan)}
 
         if op == "remote_deviation_list":
@@ -957,22 +962,32 @@ secret values or request secrets through chat; use the secure input flow.
                     ),
                 }
             if op == "remote_deviation_approve":
-                input_request = (deviation.get("request") or {}).get("input_request")
+                request = deviation.get("request") or {}
+                input_request = request.get("input_request")
                 if isinstance(input_request, dict):
                     return {
                         "input_request": input_request,
                         "deviation": did,
                     }
-                return {
-                    "plan": approve_remote_deviation(
-                        self.settings, self.remote_store, did
-                    )
-                }
-            return {
-                "plan": reject_remote_deviation(
+                plan = approve_remote_deviation(
                     self.settings, self.remote_store, did
                 )
-            }
+                self._record_owner_decision_evidence(
+                    outcome="approved",
+                    request=request,
+                    scope=deviation.get("target", ""),
+                )
+                return {"plan": plan}
+            request = deviation.get("request") or {}
+            plan = reject_remote_deviation(
+                self.settings, self.remote_store, did
+            )
+            self._record_owner_decision_evidence(
+                outcome="rejected",
+                request=request,
+                scope=deviation.get("target", ""),
+            )
+            return {"plan": plan}
 
         # -------- ordinary bounded local jobs --------
         if op == "submit":
@@ -1202,17 +1217,26 @@ secret values or request secrets through chat; use the secure input flow.
                     ),
                 }
             source = self.project(deviation["project"])
+            request = deviation.get("request") or {}
             if op == "deviation_approve":
-                return {
-                    "plan": approve_deviation(
-                        self.settings, self.store, source, did
-                    )
-                }
-            return {
-                "plan": reject_deviation(
+                plan = approve_deviation(
                     self.settings, self.store, source, did
                 )
-            }
+                self._record_owner_decision_evidence(
+                    outcome="approved",
+                    request=request,
+                    scope=deviation.get("project", ""),
+                )
+                return {"plan": plan}
+            plan = reject_deviation(
+                self.settings, self.store, source, did
+            )
+            self._record_owner_decision_evidence(
+                outcome="rejected",
+                request=request,
+                scope=deviation.get("project", ""),
+            )
+            return {"plan": plan}
 
         if op == "pause":
             self.paused = True
