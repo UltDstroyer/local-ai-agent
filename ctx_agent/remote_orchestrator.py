@@ -2034,6 +2034,7 @@ def run_remote_plan_step(
     validated = []
     approved_action_leases = set(context.get("approved_action_leases", []))
     approved_dependencies = set(context.get("approved_dependencies", []))
+    rejected_dependencies = set(context.get("rejected_dependencies", []))
     approved_critical_execs = set(context.get("approved_critical_execs", []))
     critical_batch_seen = set()
     for action in actions:
@@ -2170,6 +2171,33 @@ def run_remote_plan_step(
             dependency_key is not None
             and dependency_key in approved_dependencies
         )
+        if dependency_key and dependency_key in rejected_dependencies:
+            context["next_guidance"] = (
+                "The owner already rejected this exact dependency for this plan. "
+                "Do not request it again. Choose a materially different approach "
+                "inside approved authority or stop cleanly if no viable route exists."
+            )
+            context = _append_history(
+                context,
+                {
+                    "milestone": index,
+                    "dependency_rejected_by_owner": dependency_key,
+                    "action": action,
+                },
+            )
+            remote_store.update_plan(
+                plan.id,
+                status="approved",
+                attempts=0,
+                codex_thread="",
+                context=context,
+            )
+            remote_store.event(
+                plan.id,
+                "remote_rejected_dependency_not_reasked",
+                dependency_key,
+            )
+            return
         if dependency_key and not owner_action_approved and not dependency_preapproved:
             dependency_review = _manager_dependency_review(
                 settings,
@@ -3034,9 +3062,17 @@ def reject_remote_deviation(settings, remote_store, did: str) -> dict:
     if not current:
         raise RemoteOrchestrationError("remote plan disappeared after rejection")
     context = dict(current.get("context", {}))
+    request = deviation.get("request") or {}
+    if request.get("type") in ("dependency_install", "service_activation"):
+        rejected = list(context.get("rejected_dependencies", []))
+        dependency_key = str(request.get("dependency_key", "")).strip()
+        if dependency_key and dependency_key not in rejected:
+            rejected.append(dependency_key)
+        context["rejected_dependencies"] = rejected[-50:]
     context["next_guidance"] = (
-        "Owner rejected the deviation. Preserve completed in-contract work and "
-        "find an alternative that stays inside the approved remote contract."
+        "Owner rejected the deviation. Treat that exact decision as settled for "
+        "this plan, preserve completed in-contract work, and find an alternative "
+        "inside the approved remote contract."
     )
     remote_store.update_plan(
         current["id"],
