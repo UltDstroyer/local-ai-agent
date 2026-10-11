@@ -609,11 +609,11 @@ Return JSON only:
 }}
 
 If a required dependency is absent, dependency_request must be exactly one object:
-{
+{{
   "kind": "package" | "service",
   "name": "exact package or service name",
   "reason": "why this dependency is required for the current milestone"
-}
+}}
 
 Rules:
 - Prefer solving the issue together without involving the owner.
