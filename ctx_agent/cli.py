@@ -389,6 +389,7 @@ def main(argv=None):
         ) and isinstance(result.get("plan"), dict):
             plan = result["plan"]
             remote = args.action.startswith("remote-")
+            print("[Qwen manager] approved", file=sys.stderr, flush=True)
             _follow_approved_plan(args.socket, plan, remote=remote)
 
         if args.action in ("plan-progress", "remote-plan-progress"):
@@ -435,14 +436,15 @@ def main(argv=None):
             "remote-plan-approve",
             "deviation-approve",
             "remote-deviation-approve",
+        ):
+            pass
+        elif args.action in (
             "plan-reject",
             "remote-plan-reject",
             "deviation-reject",
             "remote-deviation-reject",
         ):
-            plan = result.get("plan") or {}
-            phase = (plan.get("progress") or {}).get("phase") or plan.get("status") or "updated"
-            print(f"[Qwen manager] {phase}", file=sys.stderr)
+            print("[Qwen manager] rejected", file=sys.stderr)
         elif args.action in ("diff", "plan-diff"):
             print(result["diff"])
             print("Changed:", ", ".join(result["changed"]))
