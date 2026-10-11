@@ -17,6 +17,7 @@ from .contracts import (
     deviation_amendment,
 )
 from .snapshot import create, diff, inventory
+from .governance import valid_local_owner_request
 
 
 class OrchestrationError(RuntimeError):
@@ -1163,6 +1164,10 @@ def approve_deviation(settings, store, source: Path, did: str) -> dict:
             "deviation is stale because the plan is no longer waiting for it"
         )
     request = deviation["request"]
+    if not valid_local_owner_request(request):
+        raise OrchestrationError(
+            "this request is not eligible for boss approval under current governance"
+        )
     request_type = request.get("type")
     if request_type not in ("mutation_amendment", "manager_escalation"):
         raise OrchestrationError(
