@@ -176,11 +176,17 @@ class RemoteBudget:
             raise RemoteContractError("invalid service name")
         if any(not PACKAGE_RE.fullmatch(x) for x in packages):
             raise RemoteContractError("invalid package name")
-        if any(
-            not HOST_RE.fullmatch(x) or ":" in x
-            for x in domains
-        ):
-            raise RemoteContractError("invalid allowed domain")
+        invalid_domains = [
+            x for x in domains
+            if not HOST_RE.fullmatch(x) or ":" in x
+        ]
+        if invalid_domains:
+            raise RemoteContractError(
+                "invalid allowed domain "
+                + repr(invalid_domains[0])
+                + "; use an exact bare hostname without scheme, port, path, "
+                  "or wildcard"
+            )
 
         bools = {
             "allow_sudo": raw.get("allow_sudo", False),

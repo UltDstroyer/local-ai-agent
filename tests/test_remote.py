@@ -16,6 +16,7 @@ from ctx_agent.remote_orchestrator import (
     _ask_json_object,
     _json_object,
     _remote_context_dir,
+    _validated_remote_plan,
 )
 from ctx_agent.remote_store import RemoteStore
 from ctx_agent.ssh_bridge import SSHBridge, SSHBridgeError, _ssh_base
@@ -131,6 +132,52 @@ class RemoteContractTests(unittest.TestCase):
         plan = RemotePlan.from_dict(raw, "pi")
         self.assertEqual(plan.target, "pi")
         self.assertTrue(plan.budget.backup_required)
+
+
+class RemotePlanValidationRepairTests(unittest.TestCase):
+    def test_invalid_domain_reports_offending_value(self):
+        raw = budget(allowed_domains=["https://pkg.cloudflare.com"])
+        with self.assertRaisesRegex(
+            RemoteContractError,
+            "https://pkg.cloudflare.com",
+        ):
+            RemoteBudget.from_dict(raw)
+
+    def test_invalid_remote_plan_is_repaired_once(self):
+        target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
+        invalid = {
+            "goal": "Rebuild media server",
+            "milestones": ["Configure"],
+            "verification": ["Healthy"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(
+                allowed_domains=["https://pkg.cloudflare.com"],
+                allow_remote_admin=True,
+            ),
+        }
+        repaired = {
+            **invalid,
+            "remote_budget": budget(
+                allowed_domains=["pkg.cloudflare.com"],
+                allow_remote_admin=True,
+            ),
+        }
+        with patch(
+            "ctx_agent.remote_orchestrator._ask_json_object",
+            return_value=repaired,
+        ) as mocked:
+            plan = _validated_remote_plan(
+                SimpleNamespace(),
+                invalid,
+                target,
+                "abc123def456",
+                "Rebuild media server",
+                "balanced",
+            )
+        self.assertEqual(plan.budget.allowed_domains, ("pkg.cloudflare.com",))
+        self.assertTrue(plan.budget.allow_remote_admin)
+        self.assertEqual(mocked.call_count, 1)
 
 
 class RemoteJSONTests(unittest.TestCase):

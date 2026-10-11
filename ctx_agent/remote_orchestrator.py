@@ -226,8 +226,10 @@ allow_remote_admin=true is permitted and should prevent avoidable manual
 handoffs. It grants arbitrary commands only on the named SSH target and never
 on the desktop. Keep destructive actions tied directly to the stated goal,
 preserve SSH reachability until replacement access is verified, and never
-request or embed secret values. The owner will review the resulting authority
-before execution."""
+request or embed secret values. In remote_budget.allowed_domains, use exact
+bare hostnames only, for example pkg.cloudflare.com. Do not put URLs, schemes,
+ports, paths, CIDRs, or wildcard domains in allowed_domains. The owner will
+review the resulting authority before execution."""
 
 
 def _agreement_prompt(plan: RemotePlan) -> str:
@@ -243,6 +245,84 @@ Return JSON only:
 }}
 
 Do not request broader authority merely for convenience."""
+
+
+def _repair_remote_plan_prompt(
+    admin: dict,
+    validation_error: str,
+    goal: str,
+    target: RemoteTarget,
+) -> str:
+    return f"""The remote plan below failed deterministic contract validation. Repair only
+what is necessary to satisfy the schema while preserving the owner's goal and
+the previously negotiated authority. Return the complete corrected plan JSON
+only.
+
+Owner goal:
+{goal}
+
+Target:
+{json.dumps(target.to_dict())}
+
+Validation error:
+{validation_error}
+
+Invalid plan:
+{json.dumps(admin)[:18000]}
+
+Important schema rules:
+- allowed_domains contains exact bare hostnames only, such as
+  pkg.cloudflare.com. No URLs, schemes, ports, paths, CIDRs, or wildcards.
+- allowed_read_paths and allowed_write_paths are absolute traversal-free paths
+  or patterns.
+- allowed_services and allowed_packages contain bare names only.
+- boolean capability fields must be true/false.
+- numeric limits must remain within the documented bounds.
+- preserve allow_remote_admin=true when broad SSH administration was explicitly
+  authorized by the owner.
+
+Do not add new authority merely to make validation pass."""
+
+
+def _validated_remote_plan(
+    settings,
+    admin: dict,
+    target: RemoteTarget,
+    pid: str,
+    goal: str,
+    mode: str,
+) -> RemotePlan:
+    try:
+        return RemotePlan.from_dict(admin, target.name, pid)
+    except RemoteContractError as exc:
+        repaired = _ask_json_object(
+            settings,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Return strict JSON only. Repair the remote plan to "
+                        "satisfy deterministic contract validation."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": _repair_remote_plan_prompt(
+                        admin, str(exc), goal, target
+                    ),
+                },
+            ],
+            mode,
+            num_predict=3072,
+            num_ctx=8192,
+        )
+        try:
+            return RemotePlan.from_dict(repaired, target.name, pid)
+        except RemoteContractError as repaired_exc:
+            raise RemoteOrchestrationError(
+                "remote plan remained invalid after automatic repair: "
+                + str(repaired_exc)
+            ) from repaired_exc
 
 
 def create_remote_plan(
@@ -320,7 +400,9 @@ def create_remote_plan(
         num_predict=3072,
         num_ctx=8192,
     )
-    plan = RemotePlan.from_dict(admin, target.name, pid)
+    plan = _validated_remote_plan(
+        settings, admin, target, pid, goal, mode
+    )
     if progress:
         progress(3, list(plan.milestones))
 
