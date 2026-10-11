@@ -7,6 +7,37 @@ import json
 from .agent import ask
 
 
+def _fallback_brief(deviation: dict) -> dict:
+    request = deviation.get("request") or {}
+    reason = str(deviation.get("reason", "")).strip()
+    error = str(request.get("error", "")).strip()
+    suggested = str(request.get("suggested_action", "")).strip()
+    manager = request.get("manager_review") or {}
+    manager_reason = str(manager.get("reason", "")).strip()
+    risk = str(request.get("risk") or manager.get("risk") or "medium").lower()
+    if risk not in ("low", "medium", "high"):
+        risk = "medium"
+
+    summary_parts = []
+    if reason:
+        summary_parts.append(reason)
+    if error and error != reason:
+        summary_parts.append(error)
+    if manager_reason and manager_reason not in summary_parts:
+        summary_parts.append(manager_reason)
+    summary = " | ".join(summary_parts)[:900]
+    if not summary:
+        summary = "This deviation needs your decision."
+
+    recommendation = suggested[:500] if suggested else "Review this deviation and decide whether to approve it."
+    return {
+        "summary": summary,
+        "risk": risk,
+        "recommendation": recommendation,
+        "decision": "Approve or reject this deviation?",
+    }
+
+
 def manager_deviation_brief(settings, deviation: dict, mode: str) -> dict:
     """Turn an internal deviation payload into a concise manager-to-boss brief."""
     payload = {
@@ -71,14 +102,7 @@ Return JSON only:
             "decision": str(value.get("decision", "")).strip()[:500],
         }
     except Exception:
-        # Never leak employee/tool internals to the boss if manager summarization
-        # is unavailable. Keep the raw payload in the audit store for later review.
-        return {
-            "summary": (
-                "I hit a deviation that needs your decision, but I could not "
-                "produce a reliable manager summary."
-            ),
-            "risk": "medium",
-            "recommendation": "I recommend holding this step until I can summarize it cleanly.",
-            "decision": "Reject or defer this deviation for now?",
-        }
+        # If the manager model is unavailable, show only this deviation's
+        # relevant fields. Never dump plan history, unrelated events, or the
+        # complete stored payload into the boss-facing terminal.
+        return _fallback_brief(deviation)
