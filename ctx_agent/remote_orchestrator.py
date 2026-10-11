@@ -1961,13 +1961,21 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
     plan = RemotePlan.from_dict(row["plan"], row["target"], row["id"])
     request = deviation["request"]
 
+    if not remote_store.resolve_deviation(did, True):
+        raise RemoteOrchestrationError("remote deviation changed concurrently")
+
+    current_row = remote_store.get_plan(deviation["plan"])
+    if not current_row:
+        raise RemoteOrchestrationError("remote plan disappeared after deviation approval")
+    plan = RemotePlan.from_dict(
+        current_row["plan"], current_row["target"], current_row["id"]
+    )
+
     if request.get("type") == "remote_scope":
         action = request.get("proposed_action", {})
         plan = _amend_budget_for_action(plan, action)
         remote_store.update_plan(plan.id, plan=plan.to_dict())
     elif request.get("type") == "manual_required":
-        # Approval means the owner handled/accepted the manual dependency.
-        # The unsupported operation is still NOT added to the broker.
         pass
     elif request.get("type") in ("dependency_install", "service_activation"):
         action = request.get("proposed_action", {})
@@ -1989,9 +1997,7 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
         plan = RemotePlan.from_dict(raw, plan.target, plan.id)
         remote_store.update_plan(plan.id, plan=plan.to_dict())
 
-    if not remote_store.resolve_deviation(did, True):
-        raise RemoteOrchestrationError("remote deviation changed concurrently")
-    context = dict(row.get("context", {}))
+    context = dict(current_row.get("context", {}))
     if request.get("type") in ("dependency_install", "service_activation"):
         approved_dependencies = list(context.get("approved_dependencies", []))
         dependency_key = str(request.get("dependency_key", "")).strip()
@@ -2024,51 +2030,25 @@ def reject_remote_deviation(settings, remote_store, did: str) -> dict:
     row = remote_store.get_plan(deviation["plan"])
     if not row:
         raise RemoteOrchestrationError("remote deviation has no plan")
-    target_raw = remote_store.get_target(row["target"])
-    if not target_raw:
-        raise RemoteOrchestrationError("remote target disappeared")
-    target = RemoteTarget.from_dict(target_raw)
-    plan = RemotePlan.from_dict(row["plan"], target.name, row["id"])
-    current = int(row["current_milestone"])
-    all_mutations = list(row.get("mutations", []))
-    rollback_records = [
-        item for item in all_mutations
-        if int(item.get("milestone", -1)) == current
-    ]
-    if rollback_records:
-        result = ssh_bridge_call(
-            settings.ssh_bridge_socket,
-            {
-                "op": "rollback",
-                "target": target.to_dict(),
-                "budget": plan.budget.to_dict(),
-                "records": rollback_records,
-            },
-            timeout=300,
-        )
-        if not result.get("ok"):
-            raise RemoteOrchestrationError(
-                "could not safely roll back current remote milestone: "
-                + result.get("output", "")[-2000:]
-            )
-        all_mutations = [
-            item for item in all_mutations
-            if int(item.get("milestone", -1)) != current
-        ]
 
     if not remote_store.resolve_deviation(did, False):
         raise RemoteOrchestrationError("remote deviation changed concurrently")
-    context = dict(row.get("context", {}))
+
+    current = remote_store.get_plan(deviation["plan"])
+    if not current:
+        raise RemoteOrchestrationError("remote plan disappeared after rejection")
+    context = dict(current.get("context", {}))
     context["next_guidance"] = (
-        "Owner rejected the deviation. Use only the original approved remote "
-        "contract and find a smaller alternative."
+        "Owner rejected the deviation. Preserve completed in-contract work and "
+        "find an alternative that stays inside the approved remote contract."
     )
     remote_store.update_plan(
-        row["id"],
+        current["id"],
         status="approved",
         attempts=0,
         context=context,
-        mutations=all_mutations,
     )
-    remote_store.event(row["id"], "remote_deviation_rejected_by_owner", did)
-    return remote_store.get_plan(row["id"])
+    remote_store.event(
+        current["id"], "remote_deviation_rejected_by_owner", did
+    )
+    return remote_store.get_plan(current["id"])
