@@ -7,14 +7,25 @@ from ctx_agent.context_extension import main
 
 
 class AdapterTests(unittest.TestCase):
-    def invoke(self, argv, context="research", version="1"):
+    def invoke(self, argv, context="research", version="1", state=None):
+        if state is None:
+            state = (
+                ([{
+                    "id": "plan123",
+                    "project": context,
+                    "status": "awaiting_approval",
+                }] if context else []),
+                [],
+                [],
+                [],
+            )
         with patch.dict(os.environ, {"CTX_CONTEXT": context,
                                      "CTX_EXTENSION_API_VERSION": version}):
             with patch("ctx_agent.context_extension.agent_cli.main",
                        return_value=0) as agent:
                 with patch(
-                    "ctx_agent.context_extension._pending_for_project",
-                    return_value=None,
+                    "ctx_agent.context_extension._global_state",
+                    return_value=state,
                 ):
                     with patch("ctx_agent.context_extension.media.main",
                                return_value=0) as media:
@@ -99,7 +110,7 @@ class AdapterTests(unittest.TestCase):
     def test_plan_approval_uses_active_context(self):
         result, cli, _ = self.invoke(["approve"])
         self.assertEqual(result, 0)
-        cli.assert_called_once_with(["plan-approve", "research"])
+        cli.assert_called_once_with(["plan-approve", "research", "plan123"])
 
     def test_deviation_approval_routes_directly(self):
         result, cli, _ = self.invoke(["deviation", "approve", "abc123def456"])
@@ -188,8 +199,7 @@ class AdapterTests(unittest.TestCase):
             [],
             [],
         )
-        with patch("ctx_agent.context_extension._global_state", return_value=state):
-            result, cli, _ = self.invoke(["progress"], context="")
+        result, cli, _ = self.invoke(["progress"], context="", state=state)
         self.assertEqual(result, 0)
         cli.assert_called_once_with([
             "remote-plan-progress", "pi", "plan123"
@@ -202,8 +212,7 @@ class AdapterTests(unittest.TestCase):
             [],
             [{"id": "abc123def456", "target": "pi", "status": "pending"}],
         )
-        with patch("ctx_agent.context_extension._global_state", return_value=state):
-            result, cli, _ = self.invoke(["deviation"], context="")
+        result, cli, _ = self.invoke(["deviation"], context="", state=state)
         self.assertEqual(result, 0)
         cli.assert_called_once_with([
             "remote-deviation-show", "abc123def456"
@@ -216,8 +225,7 @@ class AdapterTests(unittest.TestCase):
             [],
             [{"id": "abc123def456", "target": "pi", "status": "pending"}],
         )
-        with patch("ctx_agent.context_extension._global_state", return_value=state):
-            result, cli, _ = self.invoke(["approve"], context="")
+        result, cli, _ = self.invoke(["approve"], context="", state=state)
         self.assertEqual(result, 0)
         cli.assert_called_once_with([
             "remote-deviation-approve", "abc123def456"
@@ -244,21 +252,28 @@ class AdapterTests(unittest.TestCase):
 
 
     def test_active_context_approval_prefers_pending_deviation(self):
-        with patch.dict(os.environ, {
-            "CTX_CONTEXT": "research",
-            "CTX_EXTENSION_API_VERSION": "1",
-        }):
-            with patch(
-                "ctx_agent.context_extension._pending_for_project",
-                return_value={"id": "abc123def456", "project": "research", "status": "pending"},
-            ):
-                with patch(
-                    "ctx_agent.context_extension.agent_cli.main",
-                    return_value=0,
-                ) as agent:
-                    result = main(["approve"])
+        state = (
+            [{"id": "plan123", "project": "research", "status": "approved"}],
+            [],
+            [{"id": "abc123def456", "project": "research", "status": "pending"}],
+            [],
+        )
+        result, agent, _ = self.invoke(["approve"], state=state)
         self.assertEqual(result, 0)
         agent.assert_called_once_with(["deviation-approve", "abc123def456"])
+
+    def test_active_context_still_prefers_single_remote_pending_deviation(self):
+        state = (
+            [{"id": "local123", "project": "research", "status": "approved"}],
+            [{"id": "remote123", "target": "pi", "status": "awaiting_deviation"}],
+            [],
+            [{"id": "abc123def456", "target": "pi", "status": "pending"}],
+        )
+        result, agent, _ = self.invoke(["approve"], state=state)
+        self.assertEqual(result, 0)
+        agent.assert_called_once_with([
+            "remote-deviation-approve", "abc123def456"
+        ])
 
 
 if __name__ == "__main__":
