@@ -39,6 +39,7 @@ def budget(**overrides):
         "allow_sudo": True,
         "allow_package_install": True,
         "allow_network": True,
+        "allow_remote_admin": False,
         "max_actions": 30,
         "max_file_writes": 8,
         "max_attempts_per_milestone": 3,
@@ -93,6 +94,30 @@ class RemoteContractTests(unittest.TestCase):
                 "op": "shell",
                 "command": "rm -rf /",
             }, b)
+
+    def test_remote_exec_requires_explicit_admin_capability(self):
+        b = RemoteBudget.from_dict(budget())
+        with self.assertRaises(RemoteContractError):
+            validate_remote_action({
+                "op": "remote_exec",
+                "command": "apt-get autoremove -y",
+                "as_root": True,
+            }, b)
+
+    def test_remote_exec_can_be_scoped_to_ssh_plan(self):
+        b = RemoteBudget.from_dict(budget(
+            allow_remote_admin=True,
+            allow_sudo=True,
+        ))
+        action = validate_remote_action({
+            "op": "remote_exec",
+            "command": "apt-get autoremove -y",
+            "as_root": True,
+            "timeout": 1200,
+        }, b)
+        self.assertEqual(action["op"], "remote_exec")
+        self.assertTrue(action["as_root"])
+        self.assertEqual(action["timeout"], 1200)
 
     def test_remote_plan_parses_visible_budget(self):
         raw = {
@@ -208,6 +233,32 @@ class SSHBridgeTests(unittest.TestCase):
                 "target": target.to_dict(),
                 "budget": budget(),
             })
+
+    def test_remote_exec_is_forwarded_only_through_ssh_runner(self):
+        target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
+        with patch("ctx_agent.ssh_bridge._run_script") as runner:
+            runner.return_value = {"ok": True, "returncode": 0, "output": "ok"}
+            result = SSHBridge().dispatch({
+                "op": "action",
+                "target": target.to_dict(),
+                "budget": budget(
+                    allow_remote_admin=True,
+                    allow_sudo=True,
+                ),
+                "action": {
+                    "op": "remote_exec",
+                    "command": "id",
+                    "as_root": True,
+                    "timeout": 60,
+                },
+                "plan": "abc123def456",
+                "milestone": 0,
+            })
+        self.assertTrue(result["ok"])
+        called_target, called_script = runner.call_args.args
+        self.assertEqual(called_target.host, "raspberrypi")
+        self.assertIn("sudo -n sh -c", called_script)
+        self.assertEqual(runner.call_args.kwargs["timeout"], 60)
 
 
 if __name__ == "__main__":
