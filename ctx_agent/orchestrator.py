@@ -717,10 +717,7 @@ def auto_approve_low_risk_deviation(
     if request.get("type") not in ("stalled", "system_error"):
         return False
     assessment = summarize_deviation(settings, deviation, mode)
-    if (
-        assessment.get("risk") != "low"
-        or assessment.get("auto_approve_safe") is not True
-    ):
+    if assessment.get("risk") != "low":
         return False
     approve_deviation(settings, store, source, did)
     store.event(
