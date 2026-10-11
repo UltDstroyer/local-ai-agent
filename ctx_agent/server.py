@@ -759,6 +759,7 @@ secret values or request secrets through chat; use the secure input flow.
                     progress=lambda index, stages=None: self._planning_update(
                         "remote_plan", target_name, index, stages
                     ),
+                    owner_policy=self._load_owner_policy(),
                 )
             except Exception as exc:
                 self._planning_finish(
@@ -1073,6 +1074,7 @@ secret values or request secrets through chat; use the secure input flow.
                     progress=lambda index, stages=None: self._planning_update(
                         "project_plan", project, index, stages
                     ),
+                    owner_policy=self._load_owner_policy(),
                 )
             except Exception as exc:
                 self._planning_finish(
@@ -1382,6 +1384,7 @@ secret values or request secrets through chat; use the secure input flow.
                 progress=lambda stage_index, stages=None: self._planning_update(
                     "remote_plan", failed["target"], stage_index, stages
                 ),
+                owner_policy=self._load_owner_policy(),
             )
         except Exception as exc:
             self._planning_finish(
@@ -1474,6 +1477,7 @@ secret values or request secrets through chat; use the secure input flow.
                 progress=lambda stage_index, stages=None: self._planning_update(
                     "project_plan", project, stage_index, stages
                 ),
+                owner_policy=self._load_owner_policy(),
             )
         except Exception as exc:
             self._planning_finish(
