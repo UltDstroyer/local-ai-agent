@@ -321,8 +321,12 @@ def remote_exec_secret_exposure_reason(command: str) -> str | None:
     if not isinstance(command, str):
         return None
     lower = " ".join(command.lower().split())
-    if re.search(r"(?:^|[;&|]\s*)(?:printenv|env)(?:\s*$|\s*[|;&])", lower):
+    if re.search(r"(?:^|[;&|]\s*)printenv\b", lower):
+        return "environment lookup may expose persistent secrets"
+    if re.search(r"(?:^|[;&|]\s*)env(?:\s*$|\s*[|;&])", lower):
         return "environment dump may expose persistent secrets"
+    if re.search(r"(?:^|[;&|]\s*)(?:set|export\s+-p)(?:\s*$|\s*[|;&])", lower):
+        return "shell variable dump may expose persistent secrets"
     if re.search(r"/proc/(?:self|\d+)/environ", lower):
         return "process environment dump may expose persistent secrets"
 
