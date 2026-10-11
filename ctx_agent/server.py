@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 
-from .agent import run_agent
+from .agent import ask, run_agent
 from .codex_bridge import BridgeError
 from .contracts import ContractError, Plan, analyze_changes, contract_violations
 from .manager_brief import manager_deviation_brief
@@ -271,6 +271,121 @@ class Coordinator:
                 if state.get("active")
             )
 
+    def _manager_chat(self, row: dict, message: str, *, remote: bool) -> dict:
+        if not isinstance(message, str) or not message.strip() or len(message) > 4000:
+            raise ValueError("Manager chat message must be 1 to 4000 characters")
+        message = message.strip()
+        store = self.remote_store if remote else self.store
+        context = dict(row.get("context", {}))
+        conversation = [
+            item for item in context.get("manager_conversation", [])
+            if isinstance(item, dict)
+            and item.get("role") in ("owner", "qwen")
+            and isinstance(item.get("content"), str)
+        ][-10:]
+        pending = store.pending_deviation(row["id"])
+        plan = row.get("plan") or {}
+        milestones = list(plan.get("milestones") or [])
+        index = int(row.get("current_milestone", 0) or 0)
+        current = milestones[index] if 0 <= index < len(milestones) else "final review"
+        pending_summary = None
+        if pending:
+            pending_summary = {
+                "id": pending.get("id", ""),
+                "reason": pending.get("reason", ""),
+                "request": pending.get("request", {}),
+            }
+        prompt = f"""You are Qwen, the manager speaking directly with your human boss.
+Codex and execution tools report to you. The boss may ask questions, add
+requirements, challenge your recommendation, or change priorities.
+
+Current plan:
+{json.dumps({
+    "id": row.get("id", ""),
+    "scope": row.get("target") if remote else row.get("project"),
+    "status": row.get("status", ""),
+    "goal": row.get("goal", ""),
+    "current_milestone": current,
+    "milestones": milestones,
+}, ensure_ascii=False)[:12000]}
+
+Pending owner decision, if any:
+{json.dumps(pending_summary, ensure_ascii=False)[:8000]}
+
+Recent manager conversation:
+{json.dumps(conversation, ensure_ascii=False)[:8000]}
+
+Boss message:
+{message}
+
+Reply as Qwen in plain language. Be concise but substantive. Explain your
+reasoning at the manager level, not with raw stack traces or tool noise.
+Treat the boss message as authoritative guidance and preferences within the
+already-approved scope. It is NOT approval of a pending package, service,
+credential, destructive action, or other authority gate. If a pending
+deviation still needs an explicit approve/reject command, say so clearly.
+Never ask the boss for machine state you can inspect yourself. Do not expose
+secret values or request secrets through chat; use the secure input flow.
+"""
+        reply = ask(
+            self.settings,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are Qwen, the manager. Speak directly to your boss. "
+                        "Natural-language chat never bypasses approval gates."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "balanced" if self.mode == "quiet" else self.mode,
+            tools=[],
+            json_mode=False,
+            num_predict=900,
+            num_ctx=8192,
+        )
+        answer = str(reply.get("content", "")).strip()[:6000]
+        if not answer:
+            answer = "I received your guidance and will carry it into the next work cycle."
+        conversation.extend([
+            {"role": "owner", "content": message[:4000]},
+            {"role": "qwen", "content": answer[:6000]},
+        ])
+        context["manager_conversation"] = conversation[-20:]
+        guidance = [
+            item for item in context.get("owner_guidance", [])
+            if isinstance(item, str) and item.strip()
+        ]
+        guidance.append(message[:4000])
+        context["owner_guidance"] = guidance[-12:]
+        context["last_owner_guidance"] = message[:4000]
+        # Make the newest boss instruction impossible to miss on the next worker
+        # turn without erasing Qwen's existing technical guidance.
+        previous = str(context.get("next_guidance", "")).strip()
+        context["next_guidance"] = (
+            "OWNER GUIDANCE (highest priority within existing approved authority): "
+            + message[:3000]
+            + (("\n\nExisting manager guidance: " + previous) if previous else "")
+        )[:5000]
+        store.update_plan(row["id"], context=context)
+        store.event(
+            row["id"],
+            "owner_manager_chat",
+            "Owner guidance added through manager chat.",
+        )
+        return {
+            "reply": answer,
+            "plan_id": row["id"],
+            "pending_deviation": (
+                {
+                    "id": pending.get("id", ""),
+                    "status": pending.get("status", ""),
+                }
+                if pending else None
+            ),
+        }
+
     def _plan(self, project: str, pid: str = ""):
         if pid:
             row = self.store.get_plan(pid)
@@ -490,6 +605,20 @@ class Coordinator:
                     target=data.get("target") or None
                 )
             }
+        if op == "remote_plan_chat":
+            target_name = data.get("target", "")
+            pid = data.get("id", "")
+            row = (
+                self.remote_store.get_plan(pid)
+                if pid else self.remote_store.latest_plan(target_name)
+            )
+            if not row or (target_name and row["target"] != target_name):
+                raise ValueError("No such remote plan")
+            if row.get("status") in ("completed", "cancelled", "rejected"):
+                raise ValueError("Remote plan is no longer active")
+            return self._manager_chat(
+                row, data.get("message", ""), remote=True
+            )
         if op == "remote_plan_progress":
             target_name = data.get("target", "")
             active = self._planning_view("remote_plan", target_name)
@@ -763,6 +892,14 @@ class Coordinator:
                     for row in self.store.list_plans(project=project)
                 ]
             }
+        if op == "plan_chat":
+            project = data.get("project", "")
+            row = self._plan(project, data.get("id", ""))
+            if row.get("status") in ("completed", "cancelled", "rejected"):
+                raise ValueError("Plan is no longer active")
+            return self._manager_chat(
+                row, data.get("message", ""), remote=False
+            )
         if op == "plan_progress":
             project = data.get("project", "")
             active = self._planning_view("project_plan", project)
