@@ -238,8 +238,7 @@ class AdapterTests(unittest.TestCase):
             [],
             [],
         )
-        with patch("ctx_agent.context_extension._global_state", return_value=state):
-            result, cli, _ = self.invoke(["approve"], context="")
+        result, cli, _ = self.invoke(["approve"], context="", state=state)
         self.assertEqual(result, 0)
         cli.assert_called_once_with([
             "remote-plan-approve", "pi", "plan123"
