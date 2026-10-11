@@ -53,8 +53,11 @@ def _remote_context_dir(settings, pid: str) -> Path:
     if settings.workspaces_dir is None:
         raise RemoteOrchestrationError("workspace directory is unavailable")
     path = settings.workspaces_dir / f"remote-{pid}"
-    path.mkdir(mode=0o2770, parents=True, exist_ok=True)
-    path.chmod(0o2770)
+    # workspaces_dir is provisioned as setgid (02770), so new child
+    # directories inherit the shared ctx-agent-users group and setgid bit.
+    # Do not set SGID explicitly here: systemd RestrictSUIDSGID=true
+    # intentionally rejects attempts by the service to add that bit.
+    path.mkdir(mode=0o770, parents=True, exist_ok=True)
     return path
 
 
