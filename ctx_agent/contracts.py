@@ -280,6 +280,7 @@ def contract_violations(plan: Plan, report: ChangeReport) -> list[str]:
 def deviation_amendment(plan: Plan, report: ChangeReport, reason: str) -> dict:
     extra = [p for p in report.changed if not path_matches(p, plan.write_scope)]
     return {
+        "type": "mutation_amendment",
         "reason": reason[:4000],
         "add_write_scope": extra,
         "mutation_budget": {
