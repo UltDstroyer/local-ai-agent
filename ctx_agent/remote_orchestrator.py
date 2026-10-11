@@ -557,6 +557,37 @@ def _append_history(context: dict, entry: dict) -> dict:
     return value
 
 
+def _repair_invalid_action_batch(settings, plan: RemotePlan, milestone: str, proposal: dict, error: str, mode: str) -> dict:
+    """Let Qwen repair Codex's malformed action batch without involving the owner."""
+    prompt = f"""You are Qwen, the manager. Codex returned an invalid action batch.
+Repair it yourself. Do not ask the owner.
+
+Milestone: {milestone}
+Approved budget: {json.dumps(plan.budget.to_dict())}
+Validation error: {error}
+Codex proposal: {json.dumps(proposal)[:12000]}
+
+Return JSON only with a non-empty actions array of at most 20 supported typed
+actions. Supported ops: read_file, write_file, ensure_dir, package_install,
+service, check, remote_exec. Preserve milestone intent and approved authority."""
+    repaired = _ask_json_object(
+        settings,
+        [
+            {"role": "system", "content": "Return strict JSON only. Repair the employee proposal."},
+            {"role": "user", "content": prompt},
+        ],
+        mode,
+        num_predict=2048,
+        num_ctx=8192,
+    )
+    repaired_error = _remote_actions_error(repaired.get("actions"))
+    if repaired_error:
+        raise RemoteOrchestrationError(
+            "manager could not repair invalid remote action batch: " + repaired_error
+        )
+    return repaired
+
+
 def _remote_actions_error(actions: object) -> str | None:
     if not isinstance(actions, list):
         return (
@@ -882,33 +913,45 @@ def run_remote_plan_step(settings, remote_store, row: dict, mode: str):
                 "proposal_excerpt": json.dumps(proposal)[:3000],
             },
         )
-        remote_store.event(
-            plan.id, "remote_action_proposal_rejected", proposal_error
-        )
-        if attempts >= plan.budget.max_attempts_per_milestone:
-            recoveries = int(context.get("invalid_proposal_recoveries", 0)) + 1
-            context["invalid_proposal_recoveries"] = recoveries
-            context["next_guidance"] = (
-                "Qwen manager correction: your previous remote action proposal "
-                "was rejected because " + proposal_error + ". Start fresh. "
-                "Return ONLY one JSON object with an 'actions' array containing "
-                "1 to 20 supported typed actions for the current milestone. "
-                "Do not include prose outside JSON and do not reuse the malformed "
-                "proposal shape."
-            )
-            context = _append_history(
-                context,
-                {
-                    "milestone": index,
-                    "manager_recovery": "invalid_remote_action_batch",
-                    "recovery_count": recoveries,
-                },
-            )
-            remote_store.event(
+        remote_store.event(plan.id, "remote_action_proposal_rejected", proposal_error)
+
+        if attempts < plan.budget.max_attempts_per_milestone:
+            remote_store.update_plan(
                 plan.id,
-                "remote_manager_recovered_invalid_proposal",
-                f"recovery {recoveries}: {proposal_error}",
+                status="approved",
+                attempts=attempts,
+                context=context,
             )
+            return
+
+        recoveries = int(context.get("invalid_proposal_recoveries", 0)) + 1
+        context["invalid_proposal_recoveries"] = recoveries
+        try:
+            repaired = _repair_invalid_action_batch(
+                settings,
+                plan,
+                plan.milestones[index],
+                proposal,
+                proposal_error,
+                mode,
+            )
+        except Exception as exc:
+            if recoveries >= 2:
+                remote_store.update_plan(
+                    plan.id,
+                    status="cancelled",
+                    result=(
+                        "Qwen stopped this milestone after repeated malformed Codex "
+                        "action batches and failed manager repair: " + str(exc)[:1200]
+                    ),
+                    context=context,
+                )
+                remote_store.event(
+                    plan.id,
+                    "remote_manager_stopped_invalid_proposal_loop",
+                    str(exc)[:1200],
+                )
+                return
             remote_store.update_plan(
                 plan.id,
                 status="approved",
@@ -916,14 +959,22 @@ def run_remote_plan_step(settings, remote_store, row: dict, mode: str):
                 codex_thread="",
                 context=context,
             )
-        else:
-            remote_store.update_plan(
+            remote_store.event(
                 plan.id,
-                status="approved",
-                attempts=attempts,
-                context=context,
+                "remote_manager_retry_after_failed_repair",
+                str(exc)[:1200],
             )
-        return
+            return
+
+        proposal = repaired
+        actions = repaired["actions"]
+        context["next_guidance"] = ""
+        remote_store.update_plan(plan.id, attempts=0, context=context)
+        remote_store.event(
+            plan.id,
+            "remote_manager_repaired_invalid_proposal",
+            f"recovery {recoveries}",
+        )
 
     action_count = int(context.get("action_count", 0))
     file_write_count = int(context.get("file_write_count", 0))
