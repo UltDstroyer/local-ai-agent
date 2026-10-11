@@ -1,8 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from ctx_agent.contracts import Plan
+from ctx_agent.orchestrator import auto_approve_low_risk_deviation
 from ctx_agent.runtime import Settings
 from ctx_agent.server import Coordinator
 from ctx_agent.store import Store
@@ -56,6 +59,68 @@ class PlanStoreTests(unittest.TestCase):
             self.assertEqual(store.get_plan(plan.id)["status"], "awaiting_deviation")
             self.assertTrue(store.resolve_deviation(did, True))
             self.assertEqual(store.get_deviation(did)["status"], "approved")
+
+
+class LowRiskDeviationTests(unittest.TestCase):
+    def test_low_risk_stalled_deviation_auto_approves(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "demo"
+            source.mkdir()
+            store = Store(root / "state.sqlite3")
+            plan = Plan.from_dict(raw_plan(), "demo")
+            store.create_plan("demo", plan.goal, plan.to_dict())
+            did = store.create_deviation(
+                plan.id,
+                "demo",
+                "verification stalled",
+                {
+                    "type": "stalled",
+                    "suggested_action": "Retry verification.",
+                },
+            )
+            with patch(
+                "ctx_agent.orchestrator.summarize_deviation",
+                return_value={
+                    "summary": "Verification needs a harmless retry.",
+                    "recommendation": "Retry.",
+                    "risk": "low",
+                    "auto_approve_safe": True,
+                },
+            ):
+                self.assertTrue(
+                    auto_approve_low_risk_deviation(
+                        SimpleNamespace(), store, source, did, "maximum"
+                    )
+                )
+            self.assertEqual(store.get_deviation(did)["status"], "approved")
+            self.assertEqual(store.get_plan(plan.id)["status"], "approved")
+
+    def test_contract_expansion_is_not_auto_approved(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "demo"
+            source.mkdir()
+            store = Store(root / "state.sqlite3")
+            plan = Plan.from_dict(raw_plan(), "demo")
+            store.create_plan("demo", plan.goal, plan.to_dict())
+            did = store.create_deviation(
+                plan.id,
+                "demo",
+                "needs another file",
+                {
+                    "type": "scope",
+                    "add_write_scope": ["helper.py"],
+                },
+            )
+            with patch("ctx_agent.orchestrator.summarize_deviation") as mocked:
+                self.assertFalse(
+                    auto_approve_low_risk_deviation(
+                        SimpleNamespace(), store, source, did, "maximum"
+                    )
+                )
+            mocked.assert_not_called()
+            self.assertEqual(store.get_deviation(did)["status"], "pending")
 
 
 class CoordinatorApprovalTests(unittest.TestCase):
