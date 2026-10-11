@@ -516,11 +516,30 @@ or a real human preference. Never ask the owner for something you can inspect.
         timeout=730,
     )
     if not reply.get("ok"):
-        return {"agreement": True, "owner_needed": manager_review.get("owner_needed", False)}
+        return {
+            "agreement": False,
+            "better_strategy": "Retry the internal Codex-Qwen check-in.",
+            "guidance_to_manager": (
+                "Codex check-in did not complete. Keep this internal and retry."
+            ),
+            "owner_needed": False,
+            "owner_request": "",
+            "risk": manager_review.get("risk", "medium"),
+        }
     try:
         value = _json_object(reply.get("message", ""))
     except Exception:
-        return {"agreement": True, "owner_needed": manager_review.get("owner_needed", False)}
+        return {
+            "agreement": False,
+            "better_strategy": "Repair the Codex check-in response and retry.",
+            "guidance_to_manager": (
+                "Codex returned an invalid check-in response. Repair it internally "
+                "before asking the owner."
+            ),
+            "owner_needed": False,
+            "owner_request": "",
+            "risk": manager_review.get("risk", "medium"),
+        }
     value["owner_needed"] = value.get("owner_needed") is True
     value["owner_request"] = str(value.get("owner_request", "")).strip()[:500]
     risk = str(value.get("risk", "medium")).lower()
@@ -651,7 +670,8 @@ Return JSON only:
     except Exception as exc:
         return {
             "approve": False,
-            "escalate": True,
+            "escalate": False,
+            "internal_error": True,
             "reason": "manager amendment review failed: " + str(exc)[:1000],
         }
 
@@ -715,6 +735,26 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
                 "final scope verification",
                 mode,
             )
+            if manager.get("internal_error"):
+                context = dict(row.get("context", {}))
+                context["next_guidance"] = (
+                    "Qwen final scope review failed internally. Retry the manager "
+                    "review rather than asking the owner."
+                )
+                store.update_plan(
+                    plan.id,
+                    status="approved",
+                    current_milestone=max(0, len(plan.milestones) - 1)
+                    if plan.milestones else 0,
+                    attempts=0,
+                    context=context,
+                )
+                store.event(
+                    plan.id,
+                    "final_scope_manager_review_recovery",
+                    str(manager.get("reason", ""))[:1200],
+                )
+                return
             if manager["approve"]:
                 plan = apply_amendment(plan, request)
                 store.update_plan(plan.id, plan=plan.to_dict())
@@ -903,6 +943,37 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
             plan.milestones[index],
             mode,
         )
+        if manager.get("internal_error"):
+            context = dict(context)
+            recoveries = int(context.get("manager_review_recoveries", 0)) + 1
+            context["manager_review_recoveries"] = recoveries
+            context["next_guidance"] = (
+                "Qwen mutation-scope review failed internally. Retry manager review "
+                "without asking the owner. " + str(manager.get("reason", ""))
+            )[:4000]
+            if recoveries <= 3:
+                store.update_plan(
+                    plan.id,
+                    status="approved",
+                    attempts=0,
+                    context=context,
+                )
+            else:
+                store.update_plan(
+                    plan.id,
+                    status="cancelled",
+                    result=(
+                        "Qwen mutation-scope review repeatedly failed internally "
+                        "without producing a genuine owner decision."
+                    ),
+                    context=context,
+                )
+            store.event(
+                plan.id,
+                "manager_amendment_review_recovery",
+                f"{recoveries}: {str(manager.get('reason', ''))[:1000]}",
+            )
+            return
         if manager["approve"]:
             plan = apply_amendment(plan, request)
             store.update_plan(plan.id, plan=plan.to_dict())
@@ -980,6 +1051,15 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
         if checkin.get("owner_request"):
             review["owner_request"] = checkin["owner_request"]
         review["risk"] = checkin.get("risk", review.get("risk", "medium"))
+    elif review.get("owner_needed") is True:
+        review["owner_needed"] = False
+        review["owner_request"] = ""
+        review["state"] = "continue"
+        review["guidance"] = (
+            "Codex did not confirm that an owner decision is required. Continue "
+            "technical investigation internally and only escalate a concrete need "
+            "that both manager and engineer agree on."
+        )
     updated_context = _append_context(
         context,
         str(review.get("context_note", "")),
