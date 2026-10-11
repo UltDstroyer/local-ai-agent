@@ -69,7 +69,7 @@ own Codex storage.
 
 
 def fail(message: str) -> int:
-    print(f"ctx-ext-agent: {message}", file=sys.stderr)
+    print(f"[Qwen manager] {message}", file=sys.stderr)
     return 2
 
 
