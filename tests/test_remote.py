@@ -18,6 +18,7 @@ from ctx_agent.remote_orchestrator import (
     _auto_expand_execution_budget,
     _json_object,
     _completion_review,
+    _critical_exec_key,
     _codex_manager_checkin_remote,
     _dependency_key,
     _dependency_owner_request,
@@ -985,6 +986,53 @@ class BossManagerEmployeeInvariantTests(unittest.TestCase):
                 if item["status"] == "pending"
             ]
             self.assertEqual(len(pending), 1)
+
+
+class CriticalRemoteExecApprovalTests(unittest.TestCase):
+    def test_critical_command_needs_fresh_owner_approval(self):
+        b = RemoteBudget.from_dict(budget(
+            allow_remote_admin=True,
+            allow_sudo=True,
+        ))
+        action = {
+            "op": "remote_exec",
+            "command": "reboot",
+            "as_root": True,
+            "timeout": 60,
+        }
+        with self.assertRaisesRegex(
+            RemoteContractError,
+            "critical remote_exec requires owner approval",
+        ):
+            validate_remote_action(action, b)
+        validated = validate_remote_action(
+            action,
+            b,
+            allow_critical_remote_exec=True,
+        )
+        self.assertEqual(validated["command"], "reboot")
+
+    def test_critical_action_key_is_exact(self):
+        base = {
+            "op": "remote_exec",
+            "command": "reboot",
+            "as_root": True,
+            "timeout": 60,
+        }
+        other = dict(base)
+        other["command"] = "poweroff"
+        self.assertNotEqual(
+            _critical_exec_key(base),
+            _critical_exec_key(other),
+        )
+
+    def test_ordinary_remote_admin_is_not_marked_critical(self):
+        self.assertIsNone(
+            critical_remote_exec_reason("find /var/log -type f -mtime +30 -print")
+        )
+        self.assertIsNotNone(
+            critical_remote_exec_reason("nft flush ruleset")
+        )
 
 
 if __name__ == "__main__":
