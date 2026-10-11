@@ -1690,8 +1690,33 @@ def _dependency_key(action: dict) -> str | None:
             or not SERVICE_RE.fullmatch(service.strip())
         ):
             return None
-        return "service:" + canonical_service_name(service.strip())
+        capability = (
+            "persistent"
+            if action.get("action") in ("enable", "enable_now")
+            else "runtime"
+        )
+        return (
+            "service:"
+            + canonical_service_name(service.strip())
+            + ":"
+            + capability
+        )
     return None
+
+
+def _dependency_preapproved(
+    action: dict,
+    approved_dependencies: set[str],
+) -> bool:
+    key = _dependency_key(action)
+    if not key:
+        return False
+    if key in approved_dependencies:
+        return True
+    if key.endswith(":runtime"):
+        stronger = key[:-len(":runtime")] + ":persistent"
+        return stronger in approved_dependencies
+    return False
 
 
 def _dependency_owner_request(
@@ -2372,9 +2397,8 @@ def run_remote_plan_step(
                     )
                     return
         dependency_key = _dependency_key(action)
-        dependency_preapproved = (
-            dependency_key is not None
-            and dependency_key in approved_dependencies
+        dependency_preapproved = _dependency_preapproved(
+            action, approved_dependencies
         )
         if dependency_key and dependency_key in rejected_dependencies:
             context["next_guidance"] = (
@@ -2797,9 +2821,8 @@ def run_remote_plan_step(
         action_lease_key = _owner_action_key(action)
         owner_action_approved = action_lease_key in approved_action_leases
         dependency_key = _dependency_key(action)
-        dependency_preapproved = (
-            dependency_key is not None
-            and dependency_key in approved_dependencies
+        dependency_preapproved = _dependency_preapproved(
+            action, approved_dependencies
         )
         execution_plan = (
             _amend_budget_for_action(plan, action)
