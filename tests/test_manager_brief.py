@@ -11,6 +11,7 @@ from unittest.mock import patch
 from ctx_agent.cli import (
     _follow_approved_plan,
     _print_live_deviation,
+    _print_manager_report,
     _print_progress_report,
     _prompt_human_input,
     _show_pending_deviation,
@@ -419,6 +420,43 @@ class RecoveryPlanningProgressTests(unittest.TestCase):
         self.assertIn("[active] 2. Codex drafts plan", text)
         self.assertIn("Recovery plan ready for your decision", text)
 
+
+
+class ManagerReportRenderingTests(unittest.TestCase):
+    def test_report_rendering_is_concise_and_structured(self):
+        output = io.StringIO()
+        with patch("sys.stdout", output):
+            _print_manager_report({
+                "progress": {
+                    "percent_complete": 60,
+                    "current_stage_name": "Verify tunnel",
+                },
+                "report": {
+                    "headline": "Server rebuild is progressing",
+                    "status": "executing",
+                    "summary": "Inspection and nginx work are complete.",
+                    "done": ["Inspected server"],
+                    "did_not_work": [{
+                        "attempt": "Old tunnel route",
+                        "why": "credential assumption was wrong",
+                        "response": "Built a replacement plan",
+                    }],
+                    "decisions": ["Owner approved cloudflared installation"],
+                    "remaining": ["Verify tunnel"],
+                    "justification": "The replacement avoided repeating a failed assumption.",
+                    "timeline": [{
+                        "at": "10:00",
+                        "event": "Inspection completed",
+                        "why": "Established current state",
+                    }],
+                },
+            })
+        text = output.getvalue()
+        self.assertIn("[Qwen manager] progress report", text)
+        self.assertIn("current progress: 60% — Verify tunnel", text)
+        self.assertIn("[failed] Old tunnel route", text)
+        self.assertIn("[pending] Verify tunnel", text)
+        self.assertIn("overall justification:", text)
 
 
 if __name__ == "__main__":
