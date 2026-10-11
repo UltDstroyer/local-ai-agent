@@ -1213,16 +1213,33 @@ def approve_deviation(settings, store, source: Path, did: str) -> dict:
     current_row = store.get_plan(deviation["plan"])
     if not current_row:
         raise OrchestrationError("plan disappeared after deviation approval")
+    if current_row.get("status") != "awaiting_deviation":
+        store.event(
+            deviation["plan"],
+            "deviation_decision_not_resumed",
+            did + ": plan changed concurrently",
+        )
+        return current_row
     plan = _plan_from_row(current_row)
-    if request_type == "mutation_amendment":
-        plan = prepared_plan
-        store.update_plan(plan.id, plan=plan.to_dict())
     context = dict(current_row.get("context", {}))
     context["next_guidance"] = str(request.get(
         "suggested_action",
         "Continue under the newly approved mutation lease.",
     ))[:4000]
-    store.update_plan(plan.id, status="approved", attempts=0, context=context)
+    resume_fields = {
+        "attempts": 0,
+        "context": context,
+    }
+    if request_type == "mutation_amendment":
+        plan = prepared_plan
+        resume_fields["plan"] = plan.to_dict()
+    if not store.resume_from_deviation(plan.id, **resume_fields):
+        store.event(
+            plan.id,
+            "deviation_decision_not_resumed",
+            did + ": plan changed concurrently",
+        )
+        return store.get_plan(plan.id)
     store.event(plan.id, "deviation_approved_by_owner", did)
     return store.get_plan(plan.id)
 
@@ -1234,19 +1251,36 @@ def reject_deviation(settings, store, source: Path, did: str) -> dict:
     row = store.get_plan(deviation["plan"])
     if not row:
         raise OrchestrationError("deviation refers to missing plan")
+    if row.get("status") != "awaiting_deviation":
+        raise OrchestrationError(
+            "deviation is stale because the plan is no longer waiting for it"
+        )
     if not store.resolve_deviation(did, False):
         raise OrchestrationError("deviation changed concurrently")
     current_row = store.get_plan(deviation["plan"])
     if not current_row:
         raise OrchestrationError("plan disappeared after deviation rejection")
+    if current_row.get("status") != "awaiting_deviation":
+        store.event(
+            deviation["plan"],
+            "deviation_decision_not_resumed",
+            did + ": plan changed concurrently",
+        )
+        return current_row
     restore_checkpoint(settings, source, current_row)
     context = dict(current_row.get("context", {}))
     context["next_guidance"] = (
         "Owner rejected the requested deviation. Find an alternative that stays "
         "strictly inside the original approved mutation lease."
     )
-    store.update_plan(
-        current_row["id"], status="approved", attempts=0, context=context
-    )
+    if not store.resume_from_deviation(
+        current_row["id"], attempts=0, context=context
+    ):
+        store.event(
+            current_row["id"],
+            "deviation_decision_not_resumed",
+            did + ": plan changed concurrently",
+        )
+        return store.get_plan(current_row["id"])
     store.event(current_row["id"], "deviation_rejected_by_owner", did)
     return store.get_plan(current_row["id"])
