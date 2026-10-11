@@ -15,6 +15,7 @@ from .remote import (
     RemotePlan,
     RemoteTarget,
     action_deviation,
+    canonical_service_name,
     validate_remote_action,
 )
 from .ssh_bridge import SSHBridgeError, ssh_bridge_call
@@ -593,6 +594,22 @@ def _append_history(context: dict, entry: dict) -> dict:
     return value
 
 
+def _remote_actions_error(actions: object) -> str | None:
+    if not isinstance(actions, list):
+        return (
+            "Codex proposal field 'actions' must be a list; got "
+            + type(actions).__name__
+        )
+    if not actions:
+        return "Codex proposal field 'actions' must contain at least one action"
+    if len(actions) > 20:
+        return (
+            f"Codex proposed {len(actions)} remote actions; maximum is 20 "
+            "per worker step"
+        )
+    return None
+
+
 def _amend_budget_for_action(plan: RemotePlan, action: dict) -> RemotePlan:
     raw = plan.to_dict()
     budget = raw["remote_budget"]
@@ -619,8 +636,14 @@ def _amend_budget_for_action(plan: RemotePlan, action: dict) -> RemotePlan:
         budget["allow_network"] = True
     elif op == "service":
         service = action.get("service")
-        if service and service not in budget["allowed_services"]:
-            budget["allowed_services"].append(service)
+        if service:
+            canonical = canonical_service_name(service)
+            approved = {
+                canonical_service_name(item)
+                for item in budget["allowed_services"]
+            }
+            if canonical not in approved:
+                budget["allowed_services"].append(service)
         if action.get("action") != "status":
             budget["allow_sudo"] = True
     elif op == "remote_exec":
@@ -632,8 +655,14 @@ def _amend_budget_for_action(plan: RemotePlan, action: dict) -> RemotePlan:
         check = action.get("check")
         if check in ("systemctl_is_active", "journal_tail"):
             service = action.get("service")
-            if service and service not in budget["allowed_services"]:
-                budget["allowed_services"].append(service)
+            if service:
+                canonical = canonical_service_name(service)
+                approved = {
+                    canonical_service_name(item)
+                    for item in budget["allowed_services"]
+                }
+                if canonical not in approved:
+                    budget["allowed_services"].append(service)
         elif check == "path_exists":
             path = action.get("path")
             if path and path not in budget["allowed_read_paths"]:
@@ -737,10 +766,52 @@ def run_remote_plan_step(settings, remote_store, row: dict, mode: str):
         remote_store.update_plan(plan.id, codex_thread=codex["thread_id"])
     proposal = _json_object(codex.get("message", ""))
     actions = proposal.get("actions")
-    if not isinstance(actions, list) or not actions or len(actions) > 20:
-        raise RemoteOrchestrationError("Codex proposed invalid remote actions")
+    proposal_error = _remote_actions_error(actions)
 
     context = dict(row.get("context", {}))
+    if proposal_error:
+        attempts = int(row["attempts"]) + 1
+        context["next_guidance"] = (
+            proposal_error
+            + ". Return a concise JSON object whose actions field is a "
+              "non-empty list of at most 20 typed remote actions."
+        )
+        context = _append_history(
+            context,
+            {
+                "milestone": index,
+                "proposal_rejected": proposal_error,
+                "proposal_excerpt": json.dumps(proposal)[:3000],
+            },
+        )
+        remote_store.event(
+            plan.id, "remote_action_proposal_rejected", proposal_error
+        )
+        if attempts >= plan.budget.max_attempts_per_milestone:
+            remote_store.create_deviation(
+                plan.id,
+                plan.target,
+                "Codex repeatedly proposed an invalid remote action batch",
+                {
+                    "type": "invalid_proposal",
+                    "reason": proposal_error,
+                    "proposal_excerpt": json.dumps(proposal)[:3000],
+                    "suggested_action": (
+                        "Review the rejected proposal shape. Approve to retry "
+                        "with the exact validation correction, or reject to "
+                        "force a different approach."
+                    ),
+                },
+            )
+        else:
+            remote_store.update_plan(
+                plan.id,
+                status="approved",
+                attempts=attempts,
+                context=context,
+            )
+        return
+
     action_count = int(context.get("action_count", 0))
     file_write_count = int(context.get("file_write_count", 0))
     if action_count + len(actions) > plan.budget.max_actions:
