@@ -332,11 +332,14 @@ Routine control is target-free:
     ctx agent status
     ctx agent approve
     ctx agent reject
-    ctx agent deviations
+    ctx agent deviation
 
 The same commands work for local project plans. ctx-agent resolves the one
 current task automatically. Plan and approval commands show a short owner
-summary rather than dumping the full contract.
+summary rather than dumping the full contract. If the task pauses on a
+deviation, `ctx agent deviation` shows only the current decision with a concise
+summary and recommendation. Historical deviations stay in the audit database
+instead of stacking up in normal terminal output.
 
 Approved plans execute autonomously in maximum mode:
 
