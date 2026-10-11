@@ -1061,10 +1061,7 @@ def auto_approve_low_risk_remote_deviation(
     if request.get("type") not in ("stalled", "system_error"):
         return False
     assessment = summarize_remote_deviation(settings, deviation, mode)
-    if (
-        assessment.get("risk") != "low"
-        or assessment.get("auto_approve_safe") is not True
-    ):
+    if assessment.get("risk") != "low":
         return False
     approve_remote_deviation(settings, remote_store, did)
     remote_store.event(

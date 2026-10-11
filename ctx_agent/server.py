@@ -85,6 +85,7 @@ class Coordinator:
         self.lock = threading.RLock()
         self.execution_lock = threading.RLock()
         self.planning_progress = {}
+        self.auto_approval_checked = set()
 
     def project(self, name):
         return project_path(self.settings.projects_dir, name)
@@ -244,11 +245,15 @@ class Coordinator:
         ]
         if len(pending) != 1:
             return False
+        did = pending[0]["id"]
+        if did in self.auto_approval_checked:
+            return False
+        self.auto_approval_checked.add(did)
         return auto_approve_low_risk_deviation(
             self.settings,
             self.store,
             source,
-            pending[0]["id"],
+            did,
             self.mode,
         )
 
@@ -262,12 +267,26 @@ class Coordinator:
         ]
         if len(pending) != 1:
             return False
+        did = pending[0]["id"]
+        if did in self.auto_approval_checked:
+            return False
+        self.auto_approval_checked.add(did)
         return auto_approve_low_risk_remote_deviation(
             self.settings,
             self.remote_store,
-            pending[0]["id"],
+            did,
             self.mode,
         )
+
+    def _sweep_pending_deviations(self):
+        for row in self.store.list_plans(limit=20):
+            if row.get("status") == "awaiting_deviation":
+                self._maybe_auto_approve_local_deviation(
+                    row, self.project(row["project"])
+                )
+        for row in self.remote_store.list_plans(limit=20):
+            if row.get("status") == "awaiting_deviation":
+                self._maybe_auto_approve_remote_deviation(row)
 
 
     def dispatch(self, data: dict):
@@ -308,6 +327,8 @@ class Coordinator:
                     json.dumps(mode)
                 )
             self.store.event(None, "resource_mode_changed", mode)
+            if mode == "maximum" and not self.paused:
+                self._sweep_pending_deviations()
             return {
                 "mode": mode,
                 "autonomous_execution": mode == "maximum",
@@ -702,6 +723,8 @@ class Coordinator:
             }
         if op == "resume":
             self.paused = False
+            if self.mode == "maximum":
+                self._sweep_pending_deviations()
             return {"paused": False}
         if op == "note":
             project, key, value = (
@@ -772,6 +795,7 @@ class Coordinator:
                 if self.paused or self.mode != "maximum":
                     self.shutdown.wait(0.75)
                     continue
+                self._sweep_pending_deviations()
                 row = self.remote_store.next_plan()
                 if not row:
                     self.shutdown.wait(0.75)
@@ -818,6 +842,7 @@ class Coordinator:
                 if self.paused or self.mode != "maximum":
                     self.shutdown.wait(0.75)
                     continue
+                self._sweep_pending_deviations()
                 row = self.store.next_plan()
                 if not row:
                     self.shutdown.wait(0.75)

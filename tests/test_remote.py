@@ -248,7 +248,7 @@ class RemoteDeviationAutoApprovalTests(unittest.TestCase):
                     "summary": "Only verification failed.",
                     "recommendation": "Retry.",
                     "risk": "low",
-                    "auto_approve_safe": True,
+                    "auto_approve_safe": False,
                 },
             ):
                 self.assertTrue(

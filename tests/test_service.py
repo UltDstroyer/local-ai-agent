@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from ctx_agent.runtime import Settings, sensitive, valid_name
@@ -119,6 +120,17 @@ class TestCoordinator(unittest.TestCase):
             self.assertTrue(c.dispatch({"op": "pause"})["paused"])
             self.assertFalse(c.dispatch({"op": "resume"})["paused"])
             self.assertTrue(c.dispatch({"op": "cancel", "id": result["id"]})["cancelled"])
+
+    def test_resume_sweeps_pending_deviations_in_maximum_mode(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            c = Coordinator(Settings(root, root / "agent.sock", root / "projects"))
+            c.mode = "maximum"
+            c.paused = True
+            with patch.object(c, "_sweep_pending_deviations") as sweep:
+                result = c.dispatch({"op": "resume"})
+            self.assertFalse(result["paused"])
+            sweep.assert_called_once_with()
 
     def test_only_one_plan_can_be_active_globally(self):
         with tempfile.TemporaryDirectory() as td:
