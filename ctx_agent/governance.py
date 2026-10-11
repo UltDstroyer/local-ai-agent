@@ -96,7 +96,31 @@ def valid_remote_owner_request(request: object) -> bool:
         "critical_remote_exec",
     }:
         action = request.get("proposed_action")
-        return isinstance(action, dict) and bool(action)
+        if not isinstance(action, dict) or not action:
+            return False
+        op = action.get("op")
+        if kind == "dependency_install":
+            packages = action.get("packages")
+            return (
+                op == "package_install"
+                and isinstance(packages, list)
+                and bool(packages)
+                and all(isinstance(item, str) and item.strip() for item in packages)
+            )
+        if kind == "service_activation":
+            return (
+                op == "service"
+                and isinstance(action.get("service"), str)
+                and bool(action.get("service", "").strip())
+                and action.get("action") in ("start", "restart", "enable", "enable_now")
+            )
+        if kind == "critical_remote_exec":
+            return (
+                op == "remote_exec"
+                and isinstance(request.get("critical_key"), str)
+                and bool(request.get("critical_key", "").strip())
+            )
+        return isinstance(op, str) and bool(op)
 
     if kind in {"human_input", "human_input_refresh"}:
         return _valid_input_request(request.get("input_request"))
