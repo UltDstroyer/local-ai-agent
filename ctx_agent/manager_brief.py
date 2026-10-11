@@ -123,7 +123,12 @@ Return JSON only:
 The request field must be a normal sentence. Never put an object, dict, list,
 credential schema, or raw input_request structure in it. If the deviation
 contains an input_request, summarize only the permission to ask for that one
-human-only input; the actual prompt happens later after approval."""
+human-only input; the actual prompt happens later after approval.
+
+For human-input deviations, use verbs like "ask you to enter" or "ask you to
+provide". Never say "retrieve", "discover", "locate", "find", or "read" the
+value, because those imply machine-side inspection. If the machine can retrieve
+or locate it, it should stay internal instead of becoming a boss request."""
     try:
         message = ask(
             settings,
