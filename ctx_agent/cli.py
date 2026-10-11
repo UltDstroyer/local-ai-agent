@@ -1,0 +1,532 @@
+"""User-facing local CLI. No privileged shell or remote network endpoint."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import socket
+import sys
+import threading
+import time
+from pathlib import Path
+
+
+def call(path, payload, timeout=900):
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        sock.connect(path)
+        sock.sendall((json.dumps(payload) + "\n").encode())
+        data = bytearray()
+        while True:
+            part = sock.recv(65536)
+            if not part:
+                break
+            data.extend(part)
+            if len(data) > 4_000_000:
+                raise RuntimeError("Response too large")
+            if b"\n" in part:
+                break
+    message = json.loads(data)
+    if not message["ok"]:
+        raise RuntimeError(message["error"])
+    return message["result"]
+
+
+def _short(value, limit=140):
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(1, limit - 1)].rstrip() + "…"
+
+
+def _print_plan_summary(result):
+    row = result.get("plan") if isinstance(result, dict) else None
+    if not isinstance(row, dict):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+    contract = row.get("plan") if isinstance(row.get("plan"), dict) else row
+    status = str(row.get("status") or "unknown").replace("_", " ")
+    print(f"Current plan [{status}]")
+    goal = contract.get("goal") or row.get("goal")
+    if goal:
+        print("Goal:", _short(goal, 180))
+    milestones = contract.get("milestones") or []
+    if milestones:
+        print("Stages:")
+        for index, milestone in enumerate(milestones, 1):
+            print(f"  {index}. {_short(milestone, 120)}")
+    budget = contract.get("remote_budget")
+    if isinstance(budget, dict):
+        authority = []
+        if budget.get("allow_remote_admin"):
+            authority.append("remote admin")
+        if budget.get("allow_sudo"):
+            authority.append("sudo")
+        if budget.get("allow_package_install"):
+            authority.append("packages")
+        if budget.get("allow_network"):
+            authority.append("network")
+        if authority:
+            print("Authority:", ", ".join(authority))
+    risks = contract.get("risks") or []
+    if risks:
+        print("Key risks:")
+        for risk in risks[:2]:
+            print("  -", _short(risk, 160))
+        if len(risks) > 2:
+            print(f"  - +{len(risks) - 2} more in the stored contract")
+    progress = row.get("progress")
+    if isinstance(progress, dict) and progress.get("waiting_on"):
+        waiting = progress["waiting_on"]
+        print("Waiting:", waiting.replace("_", " "))
+        if waiting in ("owner_approval", "owner_deviation_decision"):
+            print("Action: ctx agent approve   or   ctx agent reject")
+
+
+def _print_plan_list(result):
+    plans = result.get("plans") if isinstance(result, dict) else None
+    if not isinstance(plans, list):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+    if not plans:
+        print("No plans.")
+        return
+    for row in plans:
+        if not isinstance(row, dict):
+            continue
+        contract = row.get("plan") if isinstance(row.get("plan"), dict) else row
+        scope = row.get("target") or row.get("project") or contract.get("target") or ""
+        goal = contract.get("goal") or row.get("goal") or ""
+        print(
+            f"{row.get('id', '?')} [{row.get('status', 'unknown')}] "
+            f"{scope}: {_short(goal, 100)}"
+        )
+
+
+def _deviation_owner_summary(deviation):
+    summary = deviation.get("owner_summary")
+    if isinstance(summary, dict):
+        return (
+            _short(summary.get("summary"), 420),
+            _short(summary.get("recommendation"), 260),
+            _short(summary.get("risk"), 20),
+        )
+    request = deviation.get("request")
+    if not isinstance(request, dict):
+        request = {}
+    return (
+        _short(deviation.get("reason") or "Owner attention required.", 420),
+        _short(request.get("suggested_action") or "Review before continuing.", 260),
+        "unknown",
+    )
+
+
+def _print_deviation_summary(result):
+    if not isinstance(result, dict):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+    if isinstance(result.get("deviation"), dict):
+        deviations = [result["deviation"]]
+    else:
+        deviations = result.get("deviations")
+    if not isinstance(deviations, list):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+    if not deviations:
+        print("No deviations.")
+        return
+    pending = [
+        deviation for deviation in deviations
+        if isinstance(deviation, dict) and deviation.get("status") == "pending"
+    ]
+    if pending:
+        deviations = pending
+    else:
+        print("No pending deviations.")
+        return
+    for index, deviation in enumerate(deviations):
+        if not isinstance(deviation, dict):
+            continue
+        if index:
+            print()
+        summary, recommendation, risk = _deviation_owner_summary(deviation)
+        status = str(deviation.get("status", "unknown")).replace("_", " ")
+        print(f"Current deviation [{status}]")
+        print("Summary:", summary)
+        if risk and risk != "unknown":
+            print("Risk:", risk)
+        if recommendation:
+            print("Recommendation:", recommendation)
+
+
+def _progress_bar(percent, width=24):
+    if not isinstance(percent, int):
+        return "[" + "?" * width + "]"
+    percent = max(0, min(100, percent))
+    filled = round(width * percent / 100)
+    return "[" + "#" * filled + "-" * (width - filled) + "]"
+
+
+def _print_decision_result(action, result):
+    row = result.get("plan") if isinstance(result, dict) else None
+    status = row.get("status") if isinstance(row, dict) else None
+    if "deviation" in action:
+        verb = "approved" if action.endswith("approve") else "rejected"
+        print(f"Deviation {verb}.")
+        if verb == "approved":
+            print("The agent can continue the current task.")
+        return
+    if action.endswith("approve"):
+        print("Plan approved.")
+        progress = row.get("progress") if isinstance(row, dict) else None
+        waiting = progress.get("waiting_on") if isinstance(progress, dict) else None
+        if waiting == "maximum_mode":
+            print("Next: ctx agent mode maximum")
+        else:
+            print("Next: ctx agent progress")
+        return
+    if action.endswith("reject"):
+        print("Plan rejected.")
+        return
+    if action.endswith("cancel"):
+        print("Plan cancelled.")
+        return
+    print(f"Plan status: {str(status or 'updated').replace('_', ' ')}")
+
+
+def _duration(seconds):
+    if seconds is None:
+        return "unknown"
+    seconds = max(0, int(seconds))
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def _progress_line(progress):
+    stage = progress.get("current_stage_name") or progress.get("phase", "working")
+    index = progress.get("current_stage_index")
+    count = progress.get("stage_count")
+    prefix = f"{index}/{count} " if index and count else ""
+    elapsed = _duration(progress.get("elapsed_seconds"))
+    remaining = progress.get("estimated_remaining_seconds")
+    if remaining is not None:
+        eta = "~" + _duration(remaining) + " left"
+    else:
+        work = progress.get("estimated_work_remaining_seconds")
+        waiting = progress.get("waiting_on")
+        if work is not None:
+            eta = "~" + _duration(work) + " work left"
+            if waiting:
+                eta += f"; waiting on {waiting.replace('_', ' ')}"
+        else:
+            eta = "time left unknown"
+    percent = progress.get("percent_complete")
+    pct = f" · {percent}%" if isinstance(percent, int) else ""
+    return f"[ctx-agent] {prefix}{stage}{pct} · elapsed {elapsed} · {eta}"
+
+
+def _print_progress_report(progress):
+    percent = progress.get("percent_complete")
+    phase = str(progress.get("phase", "unknown")).replace("_", " ")
+    if isinstance(percent, int):
+        print(f"{_progress_bar(percent)} {percent}%  {phase}")
+    else:
+        print(f"{_progress_bar(None)}  {phase}")
+
+    if progress.get("current_stage_name"):
+        index = progress.get("current_stage_index")
+        count = progress.get("stage_count")
+        position = f"{index}/{count}" if index and count else "?"
+        print(
+            f"Stage {position}: "
+            f"{_short(progress['current_stage_name'], 120)}"
+        )
+
+    elapsed = _duration(progress.get("elapsed_seconds"))
+    remaining = progress.get("estimated_remaining_seconds")
+    work = progress.get("estimated_work_remaining_seconds")
+    if remaining is not None:
+        print(f"Elapsed {elapsed} | ETA ~{_duration(remaining)}")
+    elif work is not None:
+        print(f"Elapsed {elapsed} | Work left ~{_duration(work)}")
+    else:
+        print(f"Elapsed {elapsed}")
+
+    waiting = progress.get("waiting_on")
+    if waiting:
+        readable = waiting.replace("_", " ")
+        print(f"Waiting: {readable}")
+        if waiting in ("owner_approval", "owner_deviation_decision"):
+            print("Action: ctx agent approve   or   ctx agent reject")
+
+    stages = progress.get("stages") or progress.get("planning_stages") or []
+    if stages:
+        print("Stages:")
+        symbols = {
+            "complete": "[x]",
+            "running": "[>]",
+            "queued": "[>]",
+            "pending": "[ ]",
+        }
+        for stage in stages:
+            status = stage.get("status", "pending")
+            marker = symbols.get(status, "[ ]")
+            estimate = stage.get("estimated_seconds")
+            suffix = f"  ~{_duration(estimate)}" if estimate is not None else ""
+            print(
+                f"  {marker} {stage.get('index')}. "
+                f"{_short(stage.get('name'), 96)}{suffix}"
+            )
+
+    planned = progress.get("planned_execution_stages") or []
+    if planned and not stages:
+        print("Planned stages:")
+        for index, name in enumerate(planned, 1):
+            print(f"  [ ] {index}. {_short(name, 96)}")
+
+
+
+
+def _call_with_progress(path, payload, progress_payload, timeout):
+    result = {}
+    failure = {}
+    done = threading.Event()
+
+    def run():
+        try:
+            result["value"] = call(path, payload, timeout=timeout)
+        except Exception as exc:
+            failure["error"] = exc
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    last = None
+    last_planned = ()
+    while not done.wait(1.5):
+        try:
+            snapshot = call(path, progress_payload, timeout=10)["progress"]
+            percent = snapshot.get("percent_complete")
+            percent_bucket = (
+                percent // 10 if isinstance(percent, int) else None
+            )
+            key = (
+                snapshot.get("phase"),
+                snapshot.get("current_stage_index"),
+                snapshot.get("current_stage_name"),
+                percent_bucket,
+                snapshot.get("waiting_on"),
+            )
+            if key != last:
+                print(_progress_line(snapshot), file=sys.stderr, flush=True)
+                last = key
+            planned = tuple(snapshot.get("planned_execution_stages") or [])
+            if planned and planned != last_planned:
+                print("[ctx-agent] Planned execution stages:", file=sys.stderr)
+                for index, name in enumerate(planned, 1):
+                    print(f"  {index}. {_short(name, 120)}", file=sys.stderr)
+                last_planned = planned
+        except (OSError, RuntimeError, ValueError, KeyError):
+            pass
+    thread.join()
+    if "error" in failure:
+        raise failure["error"]
+    return result["value"]
+
+
+def _add_project_and_optional_id(parser):
+    parser.add_argument("project")
+    parser.add_argument("id", nargs="?")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="ctx-agent")
+    parser.add_argument(
+        "--socket",
+        default=os.environ.get("CTX_AGENT_SOCKET", "/run/ctx-agent/agent.sock"),
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Show the complete machine-readable response instead of concise output",
+    )
+    sub = parser.add_subparsers(dest="action", required=True)
+    for cmd in ("health", "projects", "list", "pause", "resume"):
+        sub.add_parser(cmd)
+    for cmd in ("init", "notes"):
+        item = sub.add_parser(cmd)
+        item.add_argument("project")
+
+    item = sub.add_parser("mode")
+    item.add_argument("mode", choices=("quiet", "balanced", "maximum"))
+
+    item = sub.add_parser("import")
+    item.add_argument("project")
+    item.add_argument("source", type=Path)
+
+    item = sub.add_parser("submit")
+    item.add_argument("project")
+    item.add_argument("prompt", help="Quoted natural-language task for Ollama")
+
+    for cmd in ("show", "events", "cancel", "diff", "apply"):
+        item = sub.add_parser(cmd)
+        item.add_argument("id")
+
+    item = sub.add_parser("note")
+    item.add_argument("project")
+    item.add_argument("key")
+    item.add_argument("text")
+
+    item = sub.add_parser("plan-create")
+    item.add_argument("project")
+    item.add_argument("goal")
+
+    item = sub.add_parser("plan-list")
+    item.add_argument("project", nargs="?")
+
+    for cmd in (
+        "plan-show", "plan-progress", "plan-approve", "plan-reject", "plan-cancel",
+        "plan-diff", "plan-apply",
+    ):
+        _add_project_and_optional_id(sub.add_parser(cmd))
+
+    item = sub.add_parser("deviation-list")
+    item.add_argument("project", nargs="?")
+
+    for cmd in ("deviation-show", "deviation-approve", "deviation-reject"):
+        item = sub.add_parser(cmd)
+        item.add_argument("id")
+
+    item = sub.add_parser("target-add")
+    item.add_argument("name")
+    item.add_argument("ssh")
+    item.add_argument("--port", type=int, default=22)
+
+    sub.add_parser("target-list")
+    for cmd in ("target-show", "target-remove", "target-inspect"):
+        item = sub.add_parser(cmd)
+        item.add_argument("name")
+
+    item = sub.add_parser("remote-plan-create")
+    item.add_argument("target")
+    item.add_argument("goal")
+
+    item = sub.add_parser("remote-plan-list")
+    item.add_argument("target", nargs="?")
+
+    for cmd in (
+        "remote-plan-show", "remote-plan-progress", "remote-plan-approve",
+        "remote-plan-reject", "remote-plan-cancel", "remote-plan-events",
+    ):
+        item = sub.add_parser(cmd)
+        item.add_argument("target")
+        item.add_argument("id", nargs="?")
+
+    item = sub.add_parser("remote-deviation-list")
+    item.add_argument("target", nargs="?")
+
+    for cmd in (
+        "remote-deviation-show",
+        "remote-deviation-approve",
+        "remote-deviation-reject",
+    ):
+        item = sub.add_parser(cmd)
+        item.add_argument("id")
+
+    args = parser.parse_args(argv)
+    data = {"op": args.action.replace("-", "_")}
+    for field in (
+        "project", "prompt", "goal", "id", "key", "text", "mode",
+        "name", "ssh", "port", "target",
+    ):
+        if hasattr(args, field):
+            value = getattr(args, field)
+            if value is not None:
+                data[field] = value
+
+    try:
+        if args.action == "import":
+            from .snapshot import SnapshotError, import_files
+
+            source = args.source.expanduser().resolve(strict=True)
+            dest = call(args.socket, {"op": "init", "project": args.project})
+            result = {
+                "project": args.project,
+                "copied": import_files(source, Path(dest["path"])),
+            }
+        else:
+            timeout = 1200 if args.action in (
+                "plan-create", "remote-plan-create", "target-inspect"
+            ) else 900
+            if args.action == "plan-create":
+                result = _call_with_progress(
+                    args.socket,
+                    data,
+                    {
+                        "op": "plan_progress",
+                        "project": args.project,
+                    },
+                    timeout,
+                )
+            elif args.action == "remote-plan-create":
+                result = _call_with_progress(
+                    args.socket,
+                    data,
+                    {
+                        "op": "remote_plan_progress",
+                        "target": args.target,
+                    },
+                    timeout,
+                )
+            else:
+                result = call(args.socket, data, timeout=timeout)
+
+        if args.json:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif args.action in ("plan-progress", "remote-plan-progress"):
+            _print_progress_report(result["progress"])
+        elif args.action in ("diff", "plan-diff"):
+            print(result["diff"])
+            print("Changed:", ", ".join(result["changed"]))
+            if "mutation_usage" in result:
+                print(json.dumps(
+                    {"mutation_usage": result["mutation_usage"]},
+                    indent=2,
+                    ensure_ascii=False,
+                ))
+        elif args.action in (
+            "plan-approve", "plan-reject", "plan-cancel",
+            "remote-plan-approve", "remote-plan-reject", "remote-plan-cancel",
+            "deviation-approve", "deviation-reject",
+            "remote-deviation-approve", "remote-deviation-reject",
+        ):
+            _print_decision_result(args.action, result)
+        elif args.action in (
+            "plan-create", "plan-show",
+            "remote-plan-create", "remote-plan-show",
+        ):
+            _print_plan_summary(result)
+        elif args.action in ("plan-list", "remote-plan-list"):
+            _print_plan_list(result)
+        elif args.action in (
+            "deviation-list", "deviation-show",
+            "remote-deviation-list", "remote-deviation-show",
+        ):
+            _print_deviation_summary(result)
+        else:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    except (OSError, RuntimeError, ValueError, KeyError) as exc:
+        print("ctx-agent:", exc, file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
