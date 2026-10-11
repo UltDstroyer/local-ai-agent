@@ -302,6 +302,13 @@ class Store:
         did = uuid.uuid4().hex[:12]
         now = time.time()
         with self.lock, self.db:
+            existing = self.db.execute(
+                "SELECT id FROM deviations WHERE plan=? AND status='pending' "
+                "ORDER BY created DESC LIMIT 1",
+                (plan,),
+            ).fetchone()
+            if existing:
+                return existing["id"]
             self.db.execute(
                 "INSERT INTO deviations(id,plan,project,status,reason,request_json,created,updated) "
                 "VALUES (?,?,?,?,?,?,?,?)",
