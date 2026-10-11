@@ -209,6 +209,26 @@ class RemoteStore:
         }
         if not fields or any(key not in allowed for key in fields):
             raise ValueError("invalid remote plan update")
+        with self.lock:
+            state_row = self.db.execute(
+                "SELECT status FROM remote_plans WHERE id=?", (pid,)
+            ).fetchone()
+        if not state_row:
+            raise ValueError("no such remote plan")
+        current_status = state_row["status"]
+        requested_status = fields.get("status")
+        terminal = {"completed", "cancelled", "rejected"}
+        if current_status in terminal:
+            if requested_status is not None and requested_status != current_status:
+                raise ValueError("terminal plan state cannot be resurrected")
+        if (
+            current_status in ("awaiting_approval", "awaiting_deviation")
+            and requested_status is not None
+            and requested_status != current_status
+        ):
+            raise ValueError(
+                "guarded plan state must use its dedicated transition method"
+            )
         encoded = {}
         for key, value in fields.items():
             if key == "context":
