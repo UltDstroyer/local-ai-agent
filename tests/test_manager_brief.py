@@ -84,9 +84,6 @@ class ManagerBriefTests(unittest.TestCase):
         self.assertEqual(brief["recommendation"], "Approve one retry.")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class ConcreteManagerDecisionTests(unittest.TestCase):
     def test_fallback_names_structured_service_request(self):
@@ -185,3 +182,7 @@ class PlainBossRequestTests(unittest.TestCase):
         self.assertIsInstance(brief["request"], str)
         self.assertNotIn("{", brief["request"])
         self.assertNotIn("cloudflared_status", brief["request"])
+
+
+if __name__ == "__main__":
+    unittest.main()
