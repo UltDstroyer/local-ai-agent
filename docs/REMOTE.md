@@ -135,14 +135,15 @@ metadata beneath:
 
 If the path did not previously exist, a marker records that fact.
 
-When the owner rejects a deviation, ctx-agent asks the broker to reverse current
-milestone file and newly-created-directory mutations, then tells Codex to find a
-solution inside the original authority.
+Remote proposed actions are validated before execution. Rejecting a deviation
+therefore does not roll back earlier successful in-contract work from the same
+milestone; the unapproved proposed action was never executed. Qwen tells Codex
+to preserve completed work and find an alternative inside existing authority.
 
-Package and service actions are not automatically uninstalled or disabled on
-rollback because doing so can be more destructive than leaving an approved
-installation in place. These actions therefore must already be visible in the
-owner-approved contract before execution.
+Typed file backups remain available for deterministic recovery from failed
+mutations. Package and service actions are not automatically uninstalled or
+disabled because doing so can be more destructive than leaving an approved
+change in place.
 
 ## Planning and execution
 
@@ -176,12 +177,16 @@ For each milestone:
 6. A fresh inspection is taken.
 7. The local manager reviews the milestone outcome, not every individual action,
    and decides whether the milestone is complete, should continue, or is blocked.
-8. Scope expansion, repeated malformed proposals, or repeated execution failure
-   pauses for owner approval.
+8. Codex and Qwen check in on the result. Technical failures, malformed
+   proposals, retries, bookkeeping limits, and inspectable system state are
+   repaired internally with bounded recovery.
+9. Only a concrete new authority, required package/service, critical remote
+   action, credential/human-only input, or real owner preference is escalated.
 
-This makes Qwen a governor rather than a foreman: it shapes the plan, enforces
-the owner-approved boundary, preserves durable context, and reviews milestone
-outcomes while Codex owns technical execution inside that boundary.
+This makes Qwen a manager rather than a foreman: it preserves context and
+policy, challenges and refines Codex's approach, and filters boss escalations.
+Codex remains the senior technical engineer and can propose a stronger strategy
+when Qwen's approach is weaker.
 
 ## Deviations
 
@@ -201,29 +206,33 @@ Reject:
 
     ctx agent remote-deviation reject ID
 
-A scope deviation approval makes the smallest inferred contract expansion needed
-for the exact proposed action. A rejection rolls back current-milestone file
-mutations and asks Codex for a smaller alternative.
+A scope deviation approval makes only the exact owner-visible contract
+expansion needed for the proposed action. A rejection leaves earlier successful
+in-contract work intact and asks Codex and Qwen for an alternative.
 
 ## Final verification
 
 After the final milestone, Codex receives one more read-only inspection and must
 return a structured ready/not-ready verdict.
 
-The remote plan is marked completed only when that final review reports that the
-goal and verification criteria are satisfied. Otherwise the plan pauses as a
-final-verification deviation.
+The remote plan is marked completed only when both Codex and Qwen sign off on
+the final verification. Technical final-review problems return to bounded
+internal rework. They do not become a boss deviation unless that rework exposes
+a concrete new authority or human-only need.
 
 ## Deliberate limitations
 
 Without allow_remote_admin, the broker remains limited to the typed action
 vocabulary above.
 
-With allow_remote_admin, the broker can run arbitrary commands on the named SSH
-target and can therefore perform package removal, repository setup, service
-migration, cleanup, and other system administration. This is intentionally a
-high-trust capability. It does not grant arbitrary local command execution on
-the desktop, and SSH agent forwarding is not enabled by the bridge.
+With allow_remote_admin, the broker can run broad arbitrary maintenance on the
+named SSH target. Package/service mutations must still use typed actions so they
+cannot bypass per-dependency/service owner approval. Critical operations that
+can destroy data, sever access, change authentication/privilege/network boot
+state, or power/reboot the target require a fresh exact-action owner approval
+even under remote-admin authority. These critical approvals are single-use.
+Remote-admin authority does not grant arbitrary local desktop execution, and
+SSH agent forwarding is not enabled by the bridge.
 
 Credential-bearing interactive login flows, secrets the agent does not possess,
 physical media changes, and operations that destroy SSH connectivity can still
@@ -241,29 +250,30 @@ Codex may request authority beyond the current remote contract by proposing the
 minimum typed action it needs. The deterministic validator still rejects that
 action first; the rejection becomes a scope request rather than an execution.
 
-Qwen then acts as the first approval tier:
+Qwen is the manager and escalation filter, not a substitute owner:
 
-- low-risk and ordinary medium-risk typed expansions can be approved
-  automatically when Qwen determines they are minimal, on-task, and supported
-  by the latest inspection;
-- every manager approval is persisted as an audit event and becomes part of the
-  plan contract;
-- high-trust requests, including arbitrary remote_exec authority and sensitive
-  SSH, boot, disk, credential, or network-lockout paths, cannot be auto-approved
-  by Qwen and are escalated to the owner;
-- ambiguous requests are escalated rather than guessed.
+- bookkeeping growth, read-only diagnosis, inspectable machine state, formatting
+  repair, retries, and technical replanning stay internal;
+- Qwen may approve only genuinely non-authority operational adjustments;
+- new packages, first service mutations, write/sudo/network authority,
+  credentials/human-only input, and critical remote-admin actions require the
+  owner;
+- Codex and Qwen check each other's technical reasoning before non-deterministic
+  escalations;
+- model failure, malformed model output, or disagreement is never itself a boss
+  decision;
+- every boss escalation contains one concrete request.
 
 The authority ladder is therefore:
 
     owner-approved plan
-        -> Codex engineer
-        -> deterministic contract validator
-        -> Qwen manager for narrow scope requests
-        -> owner only when Qwen cannot safely approve
+        -> Codex senior technical engineer
+        <-> Qwen manager / policy / memory / escalation filter
+        -> deterministic contract and SSH tooling
+        -> owner only for a concrete authority or human decision
 
-Qwen does not review every in-contract action. Its normal review is
-milestone-level and lightweight. Review depth increases after retries or
-failures.
+Qwen reviews milestone outcomes and meaningful decision points rather than every
+in-contract action. Codex can challenge Qwen with a better technical strategy.
 
 ## Automatic recovery and self-repair
 
@@ -273,14 +283,15 @@ queue, an audit event records the recovery, and Codex is instructed to take a
 fresh inspection before continuing. The system never assumes an interrupted
 remote command completed.
 
-Failed typed actions feed their exact output back into the same Codex thread.
-Codex gets bounded self-repair attempts inside the existing contract before the
-manager or owner is asked for more authority.
+Failed typed actions feed their exact output back into the Codex/Qwen recovery
+loop. Internal recovery is bounded and transient counters reset after successful
+milestones. If the agents cannot converge without new authority, the plan stops
+cleanly rather than asking the owner merely for more retries.
 
 ## Error categories
 
-Remote autonomous failures are classified before a deviation is created.
-Current categories include:
+Remote autonomous failures are classified before escalation. Most categories
+remain internal and do not create deviations. Current categories include:
 
 - policy_scope
 - codex_format
@@ -290,15 +301,19 @@ Current categories include:
 - timeout
 - credentials
 
-The suggested recovery action is specific to the category. A validation error
-must not be presented as an SSH connectivity failure.
+The suggested recovery action is specific to the category. Formatting,
+policy-routing, transport, timeout, worker, and ordinary remote-command failures
+are repaired internally with bounded recovery. A credential/access failure may
+produce a concrete human-access request. A validation error must not be
+presented as an SSH connectivity failure.
 
 ## Live deviations
 
 After an owner approval command, the CLI remains attached while autonomous work
 is active. Progress is streamed to stderr. If the plan reaches a pending
-deviation, the deviation ID, concrete reason, manager decision, error detail,
-and recommended approve/reject command are printed immediately in that terminal.
+deviation, Qwen prints a compact boss brief with the summary, one concrete
+request, risk, recommendation, decision, and approve/reject shorthand. Raw
+employee/tool details remain diagnostic-only.
 
 The plan continues to exist independently of the attached terminal; closing the
 terminal does not cancel autonomous execution.
@@ -330,5 +345,7 @@ Raw Codex output, validator details, stack traces, SSH/tool diagnostics, and
 internal remediation instructions remain in the audit store for Qwen and
 debugging. They are not printed in the ordinary boss-facing terminal flow.
 
-If Qwen cannot produce a reliable summary, the CLI fails closed with a generic
-manager message rather than leaking raw employee/tool output.
+If Qwen cannot produce a reliable summary, the fallback uses only the current
+deviation's safe structured fields and never stringifies raw employee/tool
+objects into the boss request. Explicit events/logs commands remain the
+diagnostic escape hatch.
