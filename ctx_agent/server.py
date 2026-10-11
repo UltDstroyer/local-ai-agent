@@ -408,6 +408,7 @@ class Coordinator:
                     raise ValueError(
                         "Remote plan is not awaiting initial approval"
                     )
+                self.remote_inputs.pop(row["id"], None)
                 return {
                     "plan": self._remote_plan_view(
                         self.remote_store.get_plan(row["id"])
@@ -417,6 +418,7 @@ class Coordinator:
                 raise ValueError(
                     "Remote plan cannot be cancelled in its current state"
                 )
+            self.remote_inputs.pop(row["id"], None)
             return {
                 "plan": self._remote_plan_view(
                     self.remote_store.get_plan(row["id"])
