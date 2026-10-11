@@ -3236,6 +3236,7 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
             "this deviation type is obsolete or unsupported; reject it and let "
             "Qwen/Codex re-evaluate under the current policy"
         )
+    prepared_dependency_key = ""
     if request_type in action_types:
         proposed_action = request.get("proposed_action")
         if not isinstance(proposed_action, dict) or not proposed_action:
@@ -3251,6 +3252,21 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
                 raise RemoteOrchestrationError(
                     "critical deviation does not match its exact action identity"
                 )
+        if request_type in ("dependency_install", "service_activation"):
+            derived_dependency_key = _dependency_key(proposed_action)
+            if not derived_dependency_key:
+                raise RemoteOrchestrationError(
+                    "dependency deviation does not contain a valid dependency action"
+                )
+            stored_dependency_key = str(request.get("dependency_key", "")).strip()
+            if (
+                stored_dependency_key
+                and stored_dependency_key != derived_dependency_key
+            ):
+                raise RemoteOrchestrationError(
+                    "dependency deviation identity does not match its exact action"
+                )
+            prepared_dependency_key = stored_dependency_key or derived_dependency_key
 
     if not remote_store.resolve_deviation(did, True):
         raise RemoteOrchestrationError("remote deviation changed concurrently")
@@ -3265,24 +3281,11 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
     context = dict(current_row.get("context", {}))
     if request_type in ("dependency_install", "service_activation"):
         approved_dependencies = list(context.get("approved_dependencies", []))
-        proposed_action = request.get("proposed_action")
-        derived_dependency_key = (
-            _dependency_key(proposed_action)
-            if isinstance(proposed_action, dict)
-            else None
-        )
-        stored_dependency_key = str(request.get("dependency_key", "")).strip()
         if (
-            stored_dependency_key
-            and derived_dependency_key
-            and stored_dependency_key != derived_dependency_key
+            prepared_dependency_key
+            and prepared_dependency_key not in approved_dependencies
         ):
-            raise RemoteOrchestrationError(
-                "dependency deviation identity does not match its exact action"
-            )
-        dependency_key = stored_dependency_key or derived_dependency_key or ""
-        if dependency_key and dependency_key not in approved_dependencies:
-            approved_dependencies.append(dependency_key)
+            approved_dependencies.append(prepared_dependency_key)
         context["approved_dependencies"] = approved_dependencies[-50:]
     elif request_type in ("remote_scope", "critical_remote_exec"):
         proposed_action = request.get("proposed_action")
