@@ -299,6 +299,80 @@ def _show_pending_deviation(path, *, remote, scope, plan_id=""):
     return True
 
 
+def _wait_for_recovery_successor(path, *, remote, scope, failed_plan_id):
+    print(
+        "[Qwen manager] Qwen and Codex are preparing a replacement plan for your approval.",
+        file=sys.stderr,
+        flush=True,
+    )
+    list_op = "remote_plan_list" if remote else "plan_list"
+    scope_key = "target" if remote else "project"
+    for _ in range(450):
+        result = call(
+            path,
+            {"op": list_op, scope_key: scope},
+            timeout=15,
+        )
+        plans = result.get("plans") or []
+        successor = next((
+            item for item in plans
+            if item.get("id") != failed_plan_id
+            and item.get("status") == "awaiting_approval"
+            and (
+                str((item.get("context") or {}).get("recovery_of_plan_id", ""))
+                == failed_plan_id
+                or f"Failed plan ID: {failed_plan_id}" in str(item.get("goal", ""))
+            )
+        ), None)
+        if successor:
+            print("", file=sys.stderr)
+            print(
+                "[Qwen manager] Recovery plan ready for your decision",
+                file=sys.stderr,
+                flush=True,
+            )
+            _print_plan_summary({"plan": successor})
+            print(
+                "  reply: ctx a a  (approve)  |  ctx a x  (reject)",
+                file=sys.stderr,
+                flush=True,
+            )
+            return successor
+        failed = next((
+            item for item in plans if item.get("id") == failed_plan_id
+        ), None)
+        if failed and str(
+            (failed.get("context") or {}).get("recovery_plan_id", "")
+        ).strip():
+            successor_id = str(
+                (failed.get("context") or {}).get("recovery_plan_id", "")
+            ).strip()
+            successor = next((
+                item for item in plans if item.get("id") == successor_id
+            ), None)
+            if successor:
+                print("", file=sys.stderr)
+                print(
+                    "[Qwen manager] Recovery plan ready for your decision",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                _print_plan_summary({"plan": successor})
+                print(
+                    "  reply: ctx a a  (approve)  |  ctx a x  (reject)",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return successor
+        time.sleep(2.0)
+    print(
+        "[Qwen manager] recovery planning has not produced an approvable plan yet",
+        file=sys.stderr,
+        flush=True,
+    )
+    return None
+
+
 def _follow_approved_plan(path, plan, *, remote):
     pid = plan.get("id", "")
     scope = plan.get("target" if remote else "project", "")
@@ -334,11 +408,18 @@ def _follow_approved_plan(path, plan, *, remote):
             # surfaced automatically.
             time.sleep(0.25)
             continue
+        if phase == "failed_internal":
+            _wait_for_recovery_successor(
+                path,
+                remote=remote,
+                scope=scope,
+                failed_plan_id=pid,
+            )
+            return
         if phase in (
             "completed",
             "cancelled",
             "rejected",
-            "failed_internal",
             "ready_for_owner_review",
             "waiting_for_maximum_mode",
             "paused",
@@ -548,6 +629,17 @@ def main(argv=None):
                             "target" if remote else "project": scope,
                         },
                         remote=remote,
+                    )
+            elif phase == "failed_internal":
+                remote = args.action == "remote-plan-progress"
+                scope = args.target if remote else args.project
+                pid = getattr(args, "id", None) or result["progress"].get("plan_id", "")
+                if scope and pid:
+                    _wait_for_recovery_successor(
+                        args.socket,
+                        remote=remote,
+                        scope=scope,
+                        failed_plan_id=pid,
                     )
             elif phase == "awaiting_deviation":
                 remote = args.action == "remote-plan-progress"
