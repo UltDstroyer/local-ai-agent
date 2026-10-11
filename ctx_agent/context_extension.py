@@ -40,6 +40,7 @@ Codex project workflow:
   ctx agent plan [--project NAME] show|diff|apply|cancel [PLAN_ID]
   ctx agent plan list [--project NAME]
   ctx agent progress [--project NAME | --target NAME] [PLAN_ID]
+  ctx agent chat [--project NAME | --target NAME] "MESSAGE"
   ctx agent approve [--project NAME] [PLAN_ID]
   ctx agent reject [--project NAME] [PLAN_ID]
   ctx agent deviations [--project NAME]
@@ -345,6 +346,90 @@ def _progress(rest: list[str]) -> int:
     ])
 
 
+def _chat(rest: list[str]) -> int:
+    if rest[:1] == ["--target"]:
+        if len(rest) != 3:
+            return fail('usage: ctx agent chat --target NAME "MESSAGE"')
+        target, message = rest[1], rest[2]
+        if not valid_name(target) or not message.strip():
+            return fail('usage: ctx agent chat --target NAME "MESSAGE"')
+        local_plans, remote_plans, _, _ = _global_state()
+        candidates = [
+            item for item in remote_plans
+            if item.get("target") == target
+            and item.get("status") not in ("completed", "cancelled", "rejected")
+        ]
+        if not candidates:
+            raise ValueError("target has no active manager plan")
+        plan = max(
+            candidates,
+            key=lambda item: float(
+                item.get("updated") or item.get("created") or 0
+            ),
+        )
+        return agent_cli.main([
+            "remote-plan-chat", target, plan["id"], message
+        ])
+
+    if rest[:1] == ["--project"]:
+        if len(rest) != 3:
+            return fail('usage: ctx agent chat --project NAME "MESSAGE"')
+        project, message = rest[1], rest[2]
+        if not valid_name(project) or not message.strip():
+            return fail('usage: ctx agent chat --project NAME "MESSAGE"')
+        local_plans, _, _, _ = _global_state()
+        candidates = [
+            item for item in local_plans
+            if item.get("project") == project
+            and item.get("status") not in ("completed", "cancelled", "rejected")
+        ]
+        if not candidates:
+            raise ValueError("project has no active manager plan")
+        plan = max(
+            candidates,
+            key=lambda item: float(
+                item.get("updated") or item.get("created") or 0
+            ),
+        )
+        return agent_cli.main([
+            "plan-chat", project, plan["id"], message
+        ])
+
+    if len(rest) != 1 or not rest[0].strip():
+        return fail(
+            'usage: ctx agent chat [--project NAME | --target NAME] "MESSAGE"'
+        )
+    message = rest[0]
+    project = os.environ.get("CTX_CONTEXT", "")
+    if project:
+        if not valid_name(project):
+            raise ValueError("invalid active project name")
+        local_plans, _, _, _ = _global_state()
+        candidates = [
+            item for item in local_plans
+            if item.get("project") == project
+            and item.get("status") not in ("completed", "cancelled", "rejected")
+        ]
+        if len(candidates) == 1:
+            plan = candidates[0]
+            return agent_cli.main([
+                "plan-chat", project, plan["id"], message
+            ])
+        if len(candidates) > 1:
+            raise ValueError(
+                "multiple active plans in this project; use --project with a specific plan workflow"
+            )
+
+    scope_type, plan = _single_current_plan()
+    if scope_type == "target":
+        return agent_cli.main([
+            "remote-plan-chat", plan["target"], plan["id"], message
+        ])
+    return agent_cli.main([
+        "plan-chat", plan["project"], plan["id"], message
+    ])
+
+
 def _approval(action: str, rest: list[str]) -> int:
     if rest[:1] == ["--target"]:
         if len(rest) < 2 or len(rest) > 3:
@@ -555,6 +640,8 @@ def main(argv=None) -> int:
             return _target(rest)
         if action == "progress":
             return _progress(rest)
+        if action == "chat":
+            return _chat(rest)
         if action in ("approve", "reject"):
             return _approval(action, rest)
         if action == "deviations":
