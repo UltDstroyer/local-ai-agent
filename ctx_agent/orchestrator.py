@@ -32,12 +32,12 @@ def classify_project_error(exc: Exception) -> dict:
     elif "codex" in lower and ("json" in lower or "format" in lower):
         kind = "codex_format"
         action = "Retry Codex with the exact formatting correction."
-    elif "codex" in lower or isinstance(exc, RuntimeError):
-        kind = "codex_worker"
-        action = "Retry the same Codex thread with the failure details."
     elif "timeout" in lower or "timed out" in lower:
         kind = "timeout"
         action = "Retry after checking worker responsiveness."
+    elif "codex" in lower or isinstance(exc, RuntimeError):
+        kind = "codex_worker"
+        action = "Retry the same Codex thread with the failure details."
     else:
         kind = "workspace_tool"
         action = "Inspect the exact workspace/tool failure before retrying."
