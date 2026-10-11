@@ -245,12 +245,16 @@ def _call_with_progress(path, payload, progress_payload, timeout):
     while not done.wait(1.5):
         try:
             snapshot = call(path, progress_payload, timeout=10)["progress"]
+            percent = snapshot.get("percent_complete")
+            percent_bucket = (
+                percent // 10 if isinstance(percent, int) else None
+            )
             key = (
                 snapshot.get("phase"),
                 snapshot.get("current_stage_index"),
                 snapshot.get("current_stage_name"),
-                (snapshot.get("estimated_remaining_seconds") or 0) // 30,
-                snapshot.get("percent_complete"),
+                percent_bucket,
+                snapshot.get("waiting_on"),
             )
             if key != last:
                 print(_progress_line(snapshot), file=sys.stderr, flush=True)
