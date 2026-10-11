@@ -1073,18 +1073,26 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
             "Codex proposed a stronger technical approach during manager check-in."
         )
     elif checkin.get("owner_needed") is True:
-        review["owner_needed"] = True
-        if checkin.get("owner_request"):
-            review["owner_request"] = checkin["owner_request"]
-        review["risk"] = checkin.get("risk", review.get("risk", "medium"))
+        if review.get("owner_needed") is True:
+            if checkin.get("owner_request"):
+                review["owner_request"] = checkin["owner_request"]
+            review["risk"] = checkin.get("risk", review.get("risk", "medium"))
+        else:
+            review["owner_needed"] = False
+            review["owner_request"] = ""
+            review["state"] = "continue"
+            review["guidance"] = (
+                "Codex believes a boss decision may be required, but Qwen has not "
+                "independently confirmed it. Reassess together before escalating."
+            )
     elif review.get("owner_needed") is True:
         review["owner_needed"] = False
         review["owner_request"] = ""
         review["state"] = "continue"
         review["guidance"] = (
-            "Codex did not confirm that an owner decision is required. Continue "
-            "technical investigation internally and only escalate a concrete need "
-            "that both manager and engineer agree on."
+            "Qwen believes a boss decision may be required, but Codex did not "
+            "confirm it. Continue technical investigation internally and escalate "
+            "only when both agree on one concrete owner decision."
         )
     updated_context = _append_context(
         context,
