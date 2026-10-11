@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from pathlib import Path
@@ -16,6 +17,7 @@ from .remote import (
     RemoteTarget,
     action_deviation,
     canonical_service_name,
+    critical_remote_exec_reason,
     validate_remote_action,
 )
 from .ssh_bridge import SSHBridgeError, ssh_bridge_call
@@ -1267,6 +1269,82 @@ def _auto_expand_execution_budget(
     return updated, context
 
 
+def _critical_exec_key(action: dict) -> str:
+    payload = {
+        "op": action.get("op"),
+        "command": action.get("command"),
+        "as_root": action.get("as_root", False),
+        "timeout": action.get("timeout", 900),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:32]
+
+
+def _manager_critical_exec_review(
+    settings,
+    plan: RemotePlan,
+    milestone: str,
+    action: dict,
+    critical_reason: str,
+    inspection: str,
+    mode: str,
+) -> dict:
+    prompt = f"""You are Qwen, the manager. Codex proposes a critical arbitrary
+remote command that requires fresh boss approval even though broad remote-admin
+authority exists.
+
+Goal: {plan.goal}
+Milestone: {milestone}
+Critical category: {critical_reason}
+Command: {str(action.get("command", ""))[:5000]}
+Run as root: {action.get("as_root", False)}
+Fresh inspection: {inspection[:12000]}
+
+Decide whether this exact critical operation is genuinely necessary now. You
+cannot approve it yourself.
+
+Return JSON only:
+{{
+  "needed": true,
+  "reason": "why this exact critical operation is necessary or avoidable",
+  "guidance": "safer/internal alternative if it is not necessary"
+}}"""
+    try:
+        value = _ask_json_object(
+            settings,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Return strict JSON only. Review necessity; never grant "
+                        "critical authority yourself."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "balanced" if mode == "quiet" else mode,
+            num_predict=768,
+            num_ctx=6144,
+        )
+        return {
+            "needed": value.get("needed") is True,
+            "reason": str(value.get("reason", "")).strip()[:1600],
+            "guidance": str(value.get("guidance", "")).strip()[:2400],
+            "internal_error": False,
+        }
+    except Exception as exc:
+        return {
+            "needed": False,
+            "reason": "manager critical-action review failed: " + str(exc)[:1000],
+            "guidance": (
+                "Retry the internal critical-action necessity review before "
+                "asking the owner."
+            ),
+            "internal_error": True,
+        }
+
+
 def _manager_dependency_review(
     settings,
     plan: RemotePlan,
@@ -1854,7 +1932,82 @@ def run_remote_plan_step(
 
     validated = []
     approved_dependencies = set(context.get("approved_dependencies", []))
+    approved_critical_execs = set(context.get("approved_critical_execs", []))
     for action in actions:
+        critical_key = None
+        critical_approved = False
+        if isinstance(action, dict) and action.get("op") == "remote_exec":
+            critical_reason = critical_remote_exec_reason(
+                str(action.get("command", ""))
+            )
+            if critical_reason:
+                critical_key = _critical_exec_key(action)
+                critical_approved = critical_key in approved_critical_execs
+                if not critical_approved:
+                    critical_review = _manager_critical_exec_review(
+                        settings,
+                        plan,
+                        plan.milestones[index],
+                        action,
+                        critical_reason,
+                        inspection.get("output", ""),
+                        mode,
+                    )
+                    if critical_review.get("internal_error"):
+                        context["next_guidance"] = critical_review.get(
+                            "guidance", ""
+                        )[:3000]
+                        remote_store.update_plan(
+                            plan.id,
+                            status="approved",
+                            attempts=0,
+                            context=context,
+                        )
+                        remote_store.event(
+                            plan.id,
+                            "remote_critical_review_recovery",
+                            str(critical_review.get("reason", ""))[:1200],
+                        )
+                        return
+                    if not critical_review.get("needed"):
+                        context["next_guidance"] = (
+                            critical_review.get("guidance")
+                            or "Choose a non-critical approach inside existing authority."
+                        )[:3000]
+                        remote_store.update_plan(
+                            plan.id,
+                            status="approved",
+                            attempts=0,
+                            context=context,
+                        )
+                        remote_store.event(
+                            plan.id,
+                            "remote_critical_action_rejected_by_manager",
+                            critical_reason,
+                        )
+                        return
+                    remote_store.create_deviation(
+                        plan.id,
+                        plan.target,
+                        "Qwen and Codex need approval for one critical remote action",
+                        {
+                            "type": "critical_remote_exec",
+                            "critical_key": critical_key,
+                            "milestone": plan.milestones[index],
+                            "reason": critical_review.get("reason", critical_reason),
+                            "boss_request": (
+                                "Allow one critical remote administration action: "
+                                + critical_reason + "."
+                            ),
+                            "risk": "high",
+                            "proposed_action": action,
+                            "suggested_action": (
+                                "Approve only this exact critical action if you want "
+                                "Qwen and Codex to proceed with it."
+                            ),
+                        },
+                    )
+                    return
         dependency_key = _dependency_key(action)
         if dependency_key and dependency_key not in approved_dependencies:
             dependency_review = _manager_dependency_review(
@@ -1961,7 +2114,11 @@ def run_remote_plan_step(
             )
             return
         try:
-            checked = validate_remote_action(action, plan.budget)
+            checked = validate_remote_action(
+                action,
+                plan.budget,
+                allow_critical_remote_exec=critical_approved,
+            )
         except RemoteContractError as exc:
             reason = str(exc)
             if _is_remote_action_format_error(reason):
@@ -2093,7 +2250,11 @@ def run_remote_plan_step(
                     })[:5000],
                 )
                 try:
-                    checked = validate_remote_action(action, plan.budget)
+                    checked = validate_remote_action(
+                        action,
+                        plan.budget,
+                        allow_critical_remote_exec=critical_approved,
+                    )
                 except RemoteContractError as retry_exc:
                     reason = str(retry_exc)
                     manager = {
@@ -2180,6 +2341,10 @@ def run_remote_plan_step(
                 "budget": plan.budget.to_dict(),
                 "action": action,
                 "inputs": inputs,
+                "critical_owner_approved": (
+                    action.get("op") == "remote_exec"
+                    and _critical_exec_key(action) in approved_critical_execs
+                ),
                 "plan": plan.id,
                 "milestone": index,
             },
@@ -2610,6 +2775,14 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
         remote_store.update_plan(plan.id, plan=plan.to_dict())
 
     context = dict(current_row.get("context", {}))
+    if request.get("type") == "critical_remote_exec":
+        approved_critical_execs = list(
+            context.get("approved_critical_execs", [])
+        )
+        critical_key = str(request.get("critical_key", "")).strip()
+        if critical_key and critical_key not in approved_critical_execs:
+            approved_critical_execs.append(critical_key)
+        context["approved_critical_execs"] = approved_critical_execs[-30:]
     if request.get("type") in ("dependency_install", "service_activation"):
         approved_dependencies = list(context.get("approved_dependencies", []))
         dependency_key = str(request.get("dependency_key", "")).strip()
