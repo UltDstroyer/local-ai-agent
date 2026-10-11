@@ -989,6 +989,37 @@ class BossManagerEmployeeInvariantTests(unittest.TestCase):
             self.assertEqual(len(pending), 1)
 
 
+
+    def test_malformed_package_shape_never_becomes_dependency_key(self):
+        self.assertIsNone(_dependency_key({
+            "op": "package_install",
+            "packages": "cloudflared",
+        }))
+        self.assertIsNone(_dependency_key({
+            "op": "package_install",
+            "packages": ["bad package name"],
+        }))
+
+    def test_invalid_structured_dependency_name_is_rejected(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Configure tunnel",
+            "milestones": ["Configure"],
+            "verification": ["Works"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(),
+        }, "pi")
+        self.assertIsNone(_dependency_request_from_checkin(
+            plan,
+            {
+                "kind": "package",
+                "name": "cloudflared;rm",
+                "action": "",
+                "reason": "Need a tunnel client.",
+            },
+        ))
+
+
 class CriticalRemoteExecApprovalTests(unittest.TestCase):
     def test_critical_command_needs_fresh_owner_approval(self):
         b = RemoteBudget.from_dict(budget(
