@@ -14,6 +14,8 @@ def empty_raw(payload, timeout=30):
         return {"plans": []}
     if op == "target_list":
         return {"targets": [{"name": "pi"}]}
+    if op == "projects":
+        return {"projects": ["research"]}
     return {}
 
 
@@ -205,6 +207,60 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(result, 0)
         cli.assert_called_once_with([
             "remote-deviation-approve", "52eb43d5925f"
+        ])
+
+    def test_deviations_shows_only_current_remote_deviation(self):
+        def raw(payload, timeout=30):
+            if payload["op"] == "plan_list":
+                return {"plans": []}
+            if payload["op"] == "remote_plan_list":
+                return {"plans": [{
+                    "id": "abc123def456",
+                    "target": "pi",
+                    "status": "awaiting_deviation",
+                    "created": 1,
+                    "updated": 2,
+                }]}
+            if payload["op"] == "remote_plan_show":
+                return {"plan": {
+                    "deviations": [
+                        {"id": "old000000001", "status": "approved"},
+                        {"id": "52eb43d5925f", "status": "pending"},
+                    ]
+                }}
+            return empty_raw(payload, timeout)
+
+        result, cli, _, _ = self.invoke(["deviations"], context="", raw=raw)
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with([
+            "remote-deviation-show", "52eb43d5925f"
+        ])
+
+    def test_deviation_without_subcommand_shows_current_deviation(self):
+        def raw(payload, timeout=30):
+            if payload["op"] == "plan_list":
+                return {"plans": []}
+            if payload["op"] == "remote_plan_list":
+                return {"plans": [{
+                    "id": "abc123def456",
+                    "target": "pi",
+                    "status": "awaiting_deviation",
+                    "created": 1,
+                    "updated": 2,
+                }]}
+            if payload["op"] == "remote_plan_show":
+                return {"plan": {
+                    "deviations": [{
+                        "id": "52eb43d5925f",
+                        "status": "pending",
+                    }]
+                }}
+            return empty_raw(payload, timeout)
+
+        result, cli, _, _ = self.invoke(["deviation"], context="", raw=raw)
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with([
+            "remote-deviation-show", "52eb43d5925f"
         ])
 
     def test_progress_routes_to_current_project_without_project_argument(self):
