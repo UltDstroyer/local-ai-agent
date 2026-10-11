@@ -761,14 +761,81 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
             "Final scope verification passed.",
             review.get("message", ""),
         )
+        if not review.get("ok"):
+            final_state = {
+                "state": "continue",
+                "guidance": (
+                    "Codex final review did not complete. Revisit the final milestone "
+                    "and rerun technical verification."
+                ),
+                "context_note": "Final Codex review failed.",
+                "reason": "final Codex review did not complete",
+                "owner_needed": False,
+            }
+        else:
+            final_state = _admin_review(
+                settings,
+                plan,
+                "Final project verification",
+                review.get("message", ""),
+                report.to_dict(),
+                patch,
+                context,
+                mode,
+            )
+
+        if final_state.get("state") != "complete":
+            cycles = int(context.get("final_review_recoveries", 0)) + 1
+            context["final_review_recoveries"] = cycles
+            context["next_guidance"] = str(
+                final_state.get("guidance", "")
+            )[:4000]
+            if final_state.get("owner_needed") is True:
+                context["next_guidance"] = (
+                    "Qwen believes final verification may require new owner authority. "
+                    "Return to implementation and turn that need into one concrete "
+                    "structured action or dependency request before escalating. "
+                    + context["next_guidance"]
+                )[:4000]
+            if cycles <= 3 and plan.milestones:
+                store.update_plan(
+                    plan.id,
+                    status="approved",
+                    current_milestone=max(0, len(plan.milestones) - 1),
+                    attempts=0,
+                    context=context,
+                )
+                store.event(
+                    plan.id,
+                    "final_review_rework",
+                    f"{cycles}: {str(final_state.get('reason', ''))[:1200]}",
+                )
+            else:
+                store.update_plan(
+                    plan.id,
+                    status="cancelled",
+                    context=context,
+                    result=(
+                        "Final project verification repeatedly failed without "
+                        "identifying a concrete owner decision."
+                    ),
+                )
+                store.event(
+                    plan.id,
+                    "final_review_recovery_exhausted",
+                    str(final_state.get("reason", ""))[:1200],
+                )
+            return
+
+        context["next_guidance"] = ""
         store.update_plan(
             plan.id,
             status="ready_for_review",
             context=context,
             result=(
-                "All milestones completed within the approved mutation contract. "
-                "Final owner review and explicit apply are required.\n\nCodex review:\n"
-                + review.get("message", "")[:12000]
+                "Codex and Qwen completed final verification within the approved "
+                "mutation contract. Final owner review and explicit apply are required.\n\n"
+                "Codex review:\n" + review.get("message", "")[:12000]
             ),
             attempts=0,
         )
