@@ -25,6 +25,11 @@ DEFAULT_MANAGEMENT_CONTRACT = {
         "minor_failure": "qwen_and_codex_handle_internally",
         "major_replan": "create_successor_and_require_owner_approval",
     },
+    "escalation": {
+        "require_qwen_codex_consensus": True,
+        "low_confidence_or_disagreement": "investigate_internally",
+        "owner_request_must_be_concrete": True,
+    },
     "reporting": {
         "style": "structured",
         "show_stage_states": True,
