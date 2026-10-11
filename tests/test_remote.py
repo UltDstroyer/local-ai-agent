@@ -16,9 +16,12 @@ from ctx_agent.remote_orchestrator import (
     _ask_json_object,
     _json_object,
     _completion_review,
+    _manager_scope_review,
     _remote_actions_error,
     _remote_context_dir,
+    _scope_risk,
     _validated_remote_plan,
+    classify_remote_error,
 )
 from ctx_agent.remote_store import RemoteStore
 from ctx_agent.ssh_bridge import SSHBridge, SSHBridgeError, _ssh_base
@@ -215,6 +218,70 @@ class RemoteJSONTests(unittest.TestCase):
 
 
 
+class RemoteManagerApprovalTests(unittest.TestCase):
+    def test_scope_risk_keeps_remote_exec_owner_gated(self):
+        self.assertEqual(_scope_risk({"op": "remote_exec", "command": "id"}), "high")
+        self.assertEqual(
+            _scope_risk({"op": "check", "check": "journal_tail", "service": "nginx"}),
+            "low",
+        )
+
+    def test_manager_can_approve_narrow_service_check(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Check Jellyfin",
+            "milestones": ["Inspect"],
+            "verification": ["Healthy"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(),
+        }, "pi")
+        with patch(
+            "ctx_agent.remote_orchestrator._ask_json_object",
+            return_value={"approve": True, "escalate": False, "reason": "on task"},
+        ):
+            review = _manager_scope_review(
+                SimpleNamespace(),
+                plan,
+                "Inspect",
+                {"op": "check", "check": "journal_tail", "service": "new.service"},
+                "check references unapproved service: new.service",
+                "new.service loaded",
+                "balanced",
+            )
+        self.assertTrue(review["approve"])
+
+    def test_manager_cannot_auto_approve_remote_exec(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Maintain server",
+            "milestones": ["Maintain"],
+            "verification": ["Healthy"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(),
+        }, "pi")
+        review = _manager_scope_review(
+            SimpleNamespace(),
+            plan,
+            "Maintain",
+            {"op": "remote_exec", "command": "id", "as_root": False},
+            "arbitrary remote administration is not approved",
+            "",
+            "balanced",
+        )
+        self.assertFalse(review["approve"])
+        self.assertTrue(review["escalate"])
+
+    def test_error_taxonomy_distinguishes_policy_and_timeout(self):
+        self.assertEqual(
+            classify_remote_error(RemoteContractError("scope"))["type"],
+            "policy_scope",
+        )
+        self.assertEqual(
+            classify_remote_error(RuntimeError("operation timed out"))["type"],
+            "timeout",
+        )
+
+
 class RemoteActionProposalTests(unittest.TestCase):
     def test_action_shape_error_reports_exact_problem(self):
         self.assertEqual(
@@ -307,6 +374,35 @@ class RemoteStoreTests(unittest.TestCase):
             self.assertIsNone(store.next_plan())
             self.assertTrue(store.approve_plan(plan.id))
             self.assertEqual(store.next_plan()["status"], "running")
+
+    def test_running_remote_plan_is_recovered_after_restart(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "remote.sqlite3"
+            store = RemoteStore(path)
+            target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
+            store.put_target(target.to_dict())
+            plan = RemotePlan.from_dict({
+                "goal": "Configure nginx",
+                "milestones": ["Configure"],
+                "verification": ["nginx active"],
+                "risks": [],
+                "assumptions": [],
+                "remote_budget": budget(),
+            }, "pi")
+            store.create_plan("pi", plan.goal, plan.to_dict())
+            store.approve_plan(plan.id)
+            self.assertEqual(store.next_plan()["status"], "running")
+            store.db.close()
+
+            recovered = RemoteStore(path)
+            row = recovered.get_plan(plan.id)
+            self.assertEqual(row["status"], "approved")
+            self.assertIn("restarted", row["context"]["next_guidance"])
+            events = recovered.events(plan.id)
+            self.assertTrue(any(
+                e["event"] == "remote_plan_recovered_after_restart"
+                for e in events
+            ))
 
     def test_active_plan_prevents_target_removal(self):
         with tempfile.TemporaryDirectory() as td:
