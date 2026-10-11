@@ -115,9 +115,14 @@ Start planning:
     ctx switch demo
     ctx agent plan "Implement the requested feature"
 
-During planning the CLI now prints live stage updates, elapsed time, and a rough
-time-left estimate. Once Codex has drafted the plan it also prints the proposed
-execution stages.
+ctx-agent allows only one active plan at a time. Once a task exists, normal
+commands operate on that current task automatically, so you do not need project
+names, target names, plan IDs, or deviation IDs for routine work.
+
+During planning the CLI prints throttled stage updates, elapsed time, and a rough
+time-left estimate. Once Codex has drafted the plan it also prints short proposed
+execution stages. Owner-facing plan output is concise by default; the complete
+machine-readable contract remains stored internally.
 
 1. Codex inspects the sanitized managed project read-only and proposes a plan.
 2. The local administrator reviews and narrows the plan.
@@ -125,14 +130,26 @@ execution stages.
 4. Nothing is modified yet.
 5. The plan is shown to the owner and waits for approval.
 
-Check progress from another terminal at any time:
+Check the current task from another terminal at any time:
+
+    ctx agent status
+
+or:
 
     ctx agent progress
 
-The progress report shows the current stage, all planned execution stages,
-elapsed time, estimated work remaining, and whether progress is waiting on
-owner approval, maximum mode, or a deviation decision. Estimates are deliberately
-rough and update using observed durations as stages finish.
+The progress dashboard shows a progress bar, current stage, elapsed time,
+estimated work remaining, concise stage states, and any owner decision that is
+blocking progress. When approval is required it prints the exact simple action:
+
+    ctx agent approve
+
+or:
+
+    ctx agent reject
+
+Estimates are deliberately rough and update using observed durations as stages
+finish.
 
 Inspect it:
 
@@ -300,35 +317,49 @@ Before planning, inspect it read-only:
 The broker collects OS, disk, mount, listener, command, and common-service
 information without changing the remote machine.
 
-Create an owner-reviewed remote plan:
+After one-time target registration, create an owner-reviewed remote plan with:
 
-    ctx agent plan --target pi       "Set up Jellyfin, nginx, and Cloudflare Tunnel as a reliable media server"
+    ctx agent plan "Set up Jellyfin, nginx, and Cloudflare Tunnel as a reliable media server"
 
-Codex receives the read-only inspection and proposes the technical plan. The
-local Qwen administrator narrows that plan into a remote mutation budget. The
-budget explicitly lists remote paths, services, packages, network permission,
-sudo permission, and action limits.
+If there is no active local project and exactly one SSH target is registered,
+ctx-agent selects that target automatically. Codex receives the read-only
+inspection and proposes the technical plan. The local Qwen administrator narrows
+that plan into a remote mutation budget.
 
-Review it:
+Routine control is target-free:
 
-    ctx agent plan --target pi show
+    ctx agent plan show
+    ctx agent status
+    ctx agent approve
+    ctx agent reject
+    ctx agent deviation
 
-Watch planning or execution progress:
+The same commands work for local project plans. ctx-agent resolves the one
+current task automatically. Plan and approval commands show a short owner
+summary rather than dumping the full contract. If the task pauses on a
+deviation, `ctx agent deviation` shows only the current decision with a concise
+summary and recommendation. Historical deviations stay in the audit database
+instead of stacking up in normal terminal output.
 
-    ctx agent progress --target pi
+Low-risk retry deviations are handled automatically. Qwen must classify the
+deviation as low risk and explicitly safe to auto-approve, and a deterministic
+policy must also confirm that approval does not expand the existing contract.
+Only stalled/retry and system-error deviations can auto-approve. Scope,
+permission, package/service/domain, budget, credential, destructive, manual, and
+final-verification deviations still require the owner.
 
-This reports the current remote stage, the full stage list, elapsed time, and a
-rough remaining-work estimate. The plan-show output also embeds the same
-progress snapshot.
+Approved plans execute autonomously in maximum mode:
 
-Approve it:
-
-    ctx agent approve --target pi
     ctx agent mode maximum
 
 Only maximum mode leases remote milestones. Codex remains the primary engineer,
 but it cannot call SSH directly. It proposes typed actions and ctx-agent checks
 them against the owner-approved contract before the SSH bridge executes them.
+
+Owner-facing plan and deviation output is intentionally concise. Remote
+deviations are summarized by the local Qwen administrator instead of printing
+raw command transcripts and logs.
+
 
 The normal typed action vocabulary supports:
 
