@@ -1126,11 +1126,29 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
             "risk": review.get("risk", "medium"),
             "suggested_action": review.get("guidance", ""),
         }
-        store.create_deviation(
-            plan.id, plan.project,
-            "Qwen requests one owner decision",
-            request,
-        )
+        if valid_local_owner_request(request):
+            store.create_deviation(
+                plan.id, plan.project,
+                "Qwen requests one owner decision",
+                request,
+            )
+        else:
+            updated_context["next_guidance"] = (
+                "Governance rejected the proposed boss escalation as internal or "
+                "underspecified. Qwen and Codex must resolve it internally or "
+                "formulate one concrete owner authority/preference decision."
+            )
+            store.update_plan(
+                plan.id,
+                status="approved",
+                attempts=0,
+                context=updated_context,
+            )
+            store.event(
+                plan.id,
+                "project_invalid_escalation_blocked",
+                str(request.get("boss_request", ""))[:1000],
+            )
     elif attempts >= plan.budget.max_attempts_per_milestone:
         if _internal_recovery_cycle(
             store,
