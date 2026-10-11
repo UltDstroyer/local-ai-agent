@@ -100,6 +100,43 @@ def _global_state():
     return local_plans, remote_plans, local_deviations, remote_deviations
 
 
+def _wake_internal_scope(kind: str, scope: str, pid: str = "") -> dict | None:
+    """Wake only a failed-internal or legacy non-owner-cancelled plan."""
+    local_plans, remote_plans, _, _ = _global_state()
+    plans = remote_plans if kind == "target" else local_plans
+    key = "target" if kind == "target" else "project"
+    matches = [
+        item for item in plans
+        if item.get(key) == scope and (not pid or item.get("id") == pid)
+    ]
+    if not matches:
+        return None
+    item = max(
+        matches,
+        key=lambda value: float(
+            value.get("updated") or value.get("created") or 0
+        ),
+    )
+    if item.get("status") not in ("failed_internal", "cancelled"):
+        return item
+    try:
+        op = (
+            "remote_plan_retry_internal"
+            if kind == "target"
+            else "plan_retry_internal"
+        )
+        payload = {
+            "op": op,
+            key: scope,
+            "id": item.get("id", ""),
+        }
+        recovered = agent_cli.call(_socket_path(), payload, timeout=30)
+        plan = recovered.get("plan")
+        return plan if isinstance(plan, dict) else item
+    except (OSError, RuntimeError, ValueError, KeyError):
+        return item
+
+
 def _single_current_plan():
     local_plans, remote_plans, _, _ = _global_state()
     active_statuses = {
@@ -133,33 +170,15 @@ def _single_current_plan():
                     or 0
                 ),
             )
-            if item.get("status") in ("failed_internal", "cancelled"):
-                try:
-                    if kind == "target":
-                        recovered = agent_cli.call(
-                            _socket_path(),
-                            {
-                                "op": "remote_plan_retry_internal",
-                                "target": item.get("target", ""),
-                                "id": item.get("id", ""),
-                            },
-                            timeout=30,
-                        )
-                    else:
-                        recovered = agent_cli.call(
-                            _socket_path(),
-                            {
-                                "op": "plan_retry_internal",
-                                "project": item.get("project", ""),
-                                "id": item.get("id", ""),
-                            },
-                            timeout=30,
-                        )
-                    plan = recovered.get("plan")
-                    if isinstance(plan, dict):
-                        return kind, plan
-                except (OSError, RuntimeError, ValueError, KeyError):
-                    pass
+            scope = item.get("target" if kind == "target" else "project", "")
+            recovered = _wake_internal_scope(
+                kind, scope, item.get("id", "")
+            )
+            if (
+                isinstance(recovered, dict)
+                and recovered.get("status") in active_statuses
+            ):
+                return kind, recovered
         raise ValueError("no active agent plan")
     if len(candidates) != 1:
         raise ValueError(
@@ -267,8 +286,15 @@ def _progress(rest: list[str]) -> int:
         target = rest[1]
         if not valid_name(target):
             return fail("invalid SSH target name")
+        pid = rest[2] if len(rest) == 3 else ""
+        recovered = _wake_internal_scope("target", target, pid)
+        effective_pid = (
+            recovered.get("id", "")
+            if isinstance(recovered, dict)
+            else pid
+        )
         return agent_cli.main([
-            "remote-plan-progress", target, *rest[2:]
+            "remote-plan-progress", target, *([effective_pid] if effective_pid else [])
         ])
 
     if rest[:1] == ["--project"]:
@@ -279,8 +305,15 @@ def _progress(rest: list[str]) -> int:
         project = rest[1]
         if not valid_name(project):
             return fail("invalid project name")
+        pid = rest[2] if len(rest) == 3 else ""
+        recovered = _wake_internal_scope("project", project, pid)
+        effective_pid = (
+            recovered.get("id", "")
+            if isinstance(recovered, dict)
+            else pid
+        )
         return agent_cli.main([
-            "plan-progress", project, *rest[2:]
+            "plan-progress", project, *([effective_pid] if effective_pid else [])
         ])
 
     if len(rest) > 1:
@@ -291,7 +324,16 @@ def _progress(rest: list[str]) -> int:
     if project:
         if not valid_name(project):
             return fail("invalid agent project name")
-        return agent_cli.main(["plan-progress", project, *rest])
+        pid = rest[0] if rest else ""
+        recovered = _wake_internal_scope("project", project, pid)
+        effective_pid = (
+            recovered.get("id", "")
+            if isinstance(recovered, dict)
+            else pid
+        )
+        return agent_cli.main([
+            "plan-progress", project, *([effective_pid] if effective_pid else [])
+        ])
 
     scope_type, plan = _single_current_plan()
     if scope_type == "target":
