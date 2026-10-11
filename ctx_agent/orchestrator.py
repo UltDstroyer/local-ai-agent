@@ -23,6 +23,31 @@ class OrchestrationError(RuntimeError):
     pass
 
 
+def classify_project_error(exc: Exception) -> dict:
+    text = str(exc)
+    lower = text.lower()
+    if isinstance(exc, ContractError):
+        kind = "policy_scope"
+        action = "Review the exact project contract violation."
+    elif "codex" in lower and ("json" in lower or "format" in lower):
+        kind = "codex_format"
+        action = "Retry Codex with the exact formatting correction."
+    elif "codex" in lower or isinstance(exc, RuntimeError):
+        kind = "codex_worker"
+        action = "Retry the same Codex thread with the failure details."
+    elif "timeout" in lower or "timed out" in lower:
+        kind = "timeout"
+        action = "Retry after checking worker responsiveness."
+    else:
+        kind = "workspace_tool"
+        action = "Inspect the exact workspace/tool failure before retrying."
+    return {
+        "type": kind,
+        "error": text[:4000],
+        "suggested_action": action,
+    }
+
+
 def _json_object(text: str) -> dict:
     if not isinstance(text, str):
         raise ContractError("model response was not text")
@@ -426,6 +451,7 @@ the current milestone is complete and on-task. Return JSON only.
 Project goal: {plan.goal}
 Milestone: {milestone}
 Approved plan: {json.dumps(plan.to_dict())[:12000]}
+Manager review depth: {context.get("manager_review_depth", "light")}
 Persistent context: {json.dumps(context)[-6000:]}
 Codex report: {codex_message[:8000]}
 Observed mutation report: {json.dumps(report)}
@@ -676,6 +702,10 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
             return
 
     _, patch = diff(source, workspace)
+    context = dict(context)
+    context["manager_review_depth"] = (
+        "deep" if int(row["attempts"]) > 0 else "light"
+    )
     review = _admin_review(
         settings,
         plan,
