@@ -101,7 +101,7 @@ def _global_state():
 
 
 def _wake_internal_scope(kind: str, scope: str, pid: str = "") -> dict | None:
-    """Wake only a failed-internal or legacy non-owner-cancelled plan."""
+    """Prepare an owner-approved successor for an internal failure."""
     local_plans, remote_plans, _, _ = _global_state()
     plans = remote_plans if kind == "target" else local_plans
     key = "target" if kind == "target" else "project"
@@ -121,16 +121,16 @@ def _wake_internal_scope(kind: str, scope: str, pid: str = "") -> dict | None:
         return None
     try:
         op = (
-            "remote_plan_retry_internal"
+            "remote_plan_prepare_recovery"
             if kind == "target"
-            else "plan_retry_internal"
+            else "plan_prepare_recovery"
         )
         payload = {
             "op": op,
             key: scope,
             "id": item.get("id", ""),
         }
-        recovered = agent_cli.call(_socket_path(), payload, timeout=30)
+        recovered = agent_cli.call(_socket_path(), payload, timeout=1800)
         plan = recovered.get("plan")
         return plan if isinstance(plan, dict) else item
     except (OSError, RuntimeError, ValueError, KeyError):
