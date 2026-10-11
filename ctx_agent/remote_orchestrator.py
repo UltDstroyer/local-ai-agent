@@ -329,8 +329,12 @@ def _validated_remote_plan(
     goal: str,
     mode: str,
 ) -> RemotePlan:
+    # The owner's goal is immutable contract data. Models may refine the
+    # implementation, but they may not rewrite, omit, or corrupt the request.
+    canonical = dict(admin) if isinstance(admin, dict) else {}
+    canonical["goal"] = goal
     try:
-        return RemotePlan.from_dict(admin, target.name, pid)
+        return RemotePlan.from_dict(canonical, target.name, pid)
     except RemoteContractError as exc:
         repaired = _ask_json_object(
             settings,
@@ -345,7 +349,7 @@ def _validated_remote_plan(
                 {
                     "role": "user",
                     "content": _repair_remote_plan_prompt(
-                        admin, str(exc), goal, target
+                        canonical, str(exc), goal, target
                     ),
                 },
             ],
@@ -353,6 +357,8 @@ def _validated_remote_plan(
             num_predict=3072,
             num_ctx=8192,
         )
+        repaired = dict(repaired) if isinstance(repaired, dict) else {}
+        repaired["goal"] = goal
         try:
             return RemotePlan.from_dict(repaired, target.name, pid)
         except RemoteContractError as repaired_exc:
