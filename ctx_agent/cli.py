@@ -597,13 +597,16 @@ def main(argv=None):
         if args.action in (
             "plan-approve",
             "remote-plan-approve",
-            "deviation-approve",
-            "remote-deviation-approve",
         ) and isinstance(result.get("plan"), dict):
             plan = result["plan"]
             remote = args.action.startswith("remote-")
             print("[Qwen manager] approved", file=sys.stderr, flush=True)
             _follow_approved_plan(args.socket, plan, remote=remote)
+        elif args.action in (
+            "deviation-approve",
+            "remote-deviation-approve",
+        ) and isinstance(result.get("plan"), dict):
+            print("[Qwen manager] deviation approved; work resumed", file=sys.stderr, flush=True)
 
         if args.action in ("plan-progress", "remote-plan-progress"):
             _print_progress_report(result["progress"])
