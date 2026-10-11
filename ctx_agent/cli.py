@@ -312,14 +312,91 @@ def _show_pending_deviation(path, *, remote, scope, plan_id=""):
 
 
 def _wait_for_recovery_successor(path, *, remote, scope, failed_plan_id):
+    list_op = "remote_plan_list" if remote else "plan_list"
+    progress_op = "remote_plan_progress" if remote else "plan_progress"
+    scope_key = "target" if remote else "project"
+
+    initial = call(
+        path,
+        {"op": list_op, scope_key: scope},
+        timeout=15,
+    )
+    failed = next((
+        item for item in (initial.get("plans") or [])
+        if item.get("id") == failed_plan_id
+    ), None)
+    reason = ""
+    failed_stage = ""
+    if failed:
+        reason = str(
+            failed.get("result")
+            or (failed.get("context") or {}).get("last_internal_failure")
+            or "The previous strategy could not be completed safely."
+        ).strip()
+        plan_spec = failed.get("plan") or {}
+        milestones = list(plan_spec.get("milestones") or [])
+        index = int(failed.get("current_milestone", 0) or 0)
+        if 0 <= index < len(milestones):
+            failed_stage = str(milestones[index])
+
+    print("", file=sys.stderr)
+    print("[Qwen manager] A new plan is required", file=sys.stderr, flush=True)
+    if failed_stage:
+        print("  failed stage:", failed_stage, file=sys.stderr)
+    if reason:
+        print("  reason:", reason[:1200], file=sys.stderr)
     print(
-        "[Qwen manager] Qwen and Codex are preparing a replacement plan for your approval.",
+        "  action: Qwen and Codex are building a materially new recovery plan for your approval.",
         file=sys.stderr,
         flush=True,
     )
-    list_op = "remote_plan_list" if remote else "plan_list"
-    scope_key = "target" if remote else "project"
+
+    last = None
+    last_report = None
     for _ in range(450):
+        try:
+            snapshot = call(
+                path,
+                {
+                    "op": progress_op,
+                    scope_key: scope,
+                    "id": failed_plan_id,
+                },
+                timeout=15,
+            )["progress"]
+            if snapshot.get("phase") == "planning":
+                key = (
+                    snapshot.get("phase"),
+                    snapshot.get("current_stage_index"),
+                    snapshot.get("percent_complete"),
+                )
+                report_key = (
+                    snapshot.get("current_stage_index"),
+                    tuple(
+                        (stage.get("index"), stage.get("status"))
+                        for stage in (
+                            snapshot.get("planning_stages")
+                            or snapshot.get("stages")
+                            or []
+                        )
+                    ),
+                )
+                if report_key != last_report:
+                    print("", file=sys.stderr)
+                    print(
+                        "[Qwen manager] replacement plan progress",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    _print_progress_report(snapshot, file=sys.stderr)
+                    last_report = report_key
+                    last = key
+                elif key != last:
+                    print(_progress_line(snapshot), file=sys.stderr, flush=True)
+                    last = key
+        except (OSError, RuntimeError, ValueError, KeyError):
+            pass
+
         result = call(
             path,
             {"op": list_op, scope_key: scope},
@@ -336,6 +413,20 @@ def _wait_for_recovery_successor(path, *, remote, scope, failed_plan_id):
                 or f"Failed plan ID: {failed_plan_id}" in str(item.get("goal", ""))
             )
         ), None)
+        if not successor:
+            failed = next((
+                item for item in plans if item.get("id") == failed_plan_id
+            ), None)
+            if failed and str(
+                (failed.get("context") or {}).get("recovery_plan_id", "")
+            ).strip():
+                successor_id = str(
+                    (failed.get("context") or {}).get("recovery_plan_id", "")
+                ).strip()
+                successor = next((
+                    item for item in plans if item.get("id") == successor_id
+                ), None)
+
         if successor:
             print("", file=sys.stderr)
             print(
@@ -350,33 +441,8 @@ def _wait_for_recovery_successor(path, *, remote, scope, failed_plan_id):
                 flush=True,
             )
             return successor
-        failed = next((
-            item for item in plans if item.get("id") == failed_plan_id
-        ), None)
-        if failed and str(
-            (failed.get("context") or {}).get("recovery_plan_id", "")
-        ).strip():
-            successor_id = str(
-                (failed.get("context") or {}).get("recovery_plan_id", "")
-            ).strip()
-            successor = next((
-                item for item in plans if item.get("id") == successor_id
-            ), None)
-            if successor:
-                print("", file=sys.stderr)
-                print(
-                    "[Qwen manager] Recovery plan ready for your decision",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                _print_plan_summary({"plan": successor})
-                print(
-                    "  reply: ctx a a  (approve)  |  ctx a x  (reject)",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                return successor
         time.sleep(2.0)
+
     print(
         "[Qwen manager] recovery planning has not produced an approvable plan yet",
         file=sys.stderr,
