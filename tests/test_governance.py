@@ -120,6 +120,64 @@ class BossViewTests(unittest.TestCase):
         }])
 
 
+    def test_rephrased_same_remote_action_has_same_decision_identity(self):
+        first = owner_decision_key({
+            "type": "dependency_install",
+            "boss_request": "Allow me to install cloudflared.",
+            "proposed_action": {
+                "op": "package_install",
+                "packages": ["cloudflared"],
+            },
+        })
+        second = owner_decision_key({
+            "type": "dependency_install",
+            "boss_request": "May I download and install cloudflared now?",
+            "proposed_action": {
+                "packages": ["cloudflared"],
+                "op": "package_install",
+            },
+        })
+        self.assertEqual(first, second)
+        self.assertTrue(first.startswith("action:"))
+
+    def test_local_generic_escalation_cannot_request_typed_secret_input(self):
+        self.assertFalse(valid_local_owner_request({
+            "type": "manager_escalation",
+            "boss_request": "Please paste your API token so Codex can continue.",
+        }))
+        self.assertFalse(valid_local_owner_request({
+            "type": "manager_escalation",
+            "boss_request": "Provide the password for this service.",
+        }))
+
+    def test_local_non_secret_preference_is_still_boss_eligible(self):
+        self.assertTrue(valid_local_owner_request({
+            "type": "manager_escalation",
+            "boss_request": "Choose whether the generated report should use PDF or HTML.",
+        }))
+
+    def test_same_local_mutation_has_stable_identity(self):
+        first = owner_decision_key({
+            "type": "mutation_amendment",
+            "mutation_budget": {
+                "allow_dependency_changes": True,
+                "max_files_changed": 4,
+            },
+            "add_write_scope": ["requirements.txt", "src/new.py"],
+        })
+        second = owner_decision_key({
+            "type": "mutation_amendment",
+            "boss_request": "Different wording does not matter.",
+            "add_write_scope": ["src/new.py", "requirements.txt"],
+            "mutation_budget": {
+                "max_files_changed": 4,
+                "allow_dependency_changes": True,
+            },
+        })
+        self.assertEqual(first, second)
+        self.assertTrue(first.startswith("mutation:"))
+
+
 if __name__ == "__main__":
     unittest.main()
 
