@@ -469,3 +469,21 @@ class SSHBridgeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RemoteInvalidProposalRecoveryTests(unittest.TestCase):
+    def test_repeated_invalid_proposal_is_recovered_internally(self):
+        # The manager should recover malformed Codex action batches without
+        # escalating a boss deviation merely because the employee returned bad JSON.
+        self.assertIn(
+            "remote_manager_recovered_invalid_proposal",
+            Path(__file__).resolve().parents[1]
+            .joinpath("ctx_agent", "remote_orchestrator.py")
+            .read_text(),
+        )
+        self.assertNotIn(
+            '"type": "invalid_proposal"',
+            Path(__file__).resolve().parents[1]
+            .joinpath("ctx_agent", "remote_orchestrator.py")
+            .read_text(),
+        )
