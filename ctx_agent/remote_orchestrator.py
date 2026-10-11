@@ -1055,6 +1055,7 @@ def _reset_remote_transient_recovery(context: dict) -> dict:
         "critical_review_recoveries",
         "critical_action_disagreement_cycles",
         "manager_recovery_cycles",
+        "hard_replan_cycles",
         "manager_review_recoveries",
         "worker_internal_recoveries",
     ):
