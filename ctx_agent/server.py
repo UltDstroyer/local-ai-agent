@@ -29,6 +29,7 @@ from .remote_orchestrator import (
     inspect_target,
     reject_remote_deviation,
     run_remote_plan_step,
+    summarize_remote_deviation,
 )
 from .remote_store import RemoteStore
 from .progress import (
@@ -392,11 +393,15 @@ class Coordinator:
             }
 
         if op == "remote_deviation_list":
-            return {
-                "deviations": self.remote_store.list_deviations(
-                    target=data.get("target") or None
-                )
-            }
+            deviations = self.remote_store.list_deviations(
+                target=data.get("target") or None
+            )
+            for deviation in deviations:
+                if deviation.get("status") == "pending":
+                    deviation["owner_summary"] = summarize_remote_deviation(
+                        self.settings, deviation, self.mode
+                    )
+            return {"deviations": deviations}
         if op in (
             "remote_deviation_show",
             "remote_deviation_approve",
@@ -409,6 +414,9 @@ class Coordinator:
             if not deviation:
                 raise ValueError("No such remote deviation")
             if op == "remote_deviation_show":
+                deviation["owner_summary"] = summarize_remote_deviation(
+                    self.settings, deviation, self.mode
+                )
                 return {"deviation": deviation}
             if op == "remote_deviation_approve":
                 return {
