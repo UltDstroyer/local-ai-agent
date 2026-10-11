@@ -601,8 +601,16 @@ Return JSON only:
   "guidance_to_manager": "",
   "owner_needed": false,
   "owner_request": "",
-  "risk": "low|medium|high"
+  "risk": "low|medium|high",
+  "dependency_request": null
 }}
+
+If a required dependency is absent, dependency_request must be exactly one object:
+{
+  "kind": "package" | "service",
+  "name": "exact package or service name",
+  "reason": "why this dependency is required for the current milestone"
+}
 
 Rules:
 - Prefer solving the issue together without involving the owner.
@@ -610,6 +618,8 @@ Rules:
   concretely in better_strategy and guidance_to_manager.
 - Set owner_needed=true only for genuine new authority, a new dependency/service
   approval, a credential/human-only input, or a human preference/choice.
+- If a dependency required by the technical approach is missing, name it in
+  dependency_request instead of vaguely describing an inactive/missing service.
 - Never ask the owner for observable machine state.
 - Do not bundle unrelated owner decisions.
 """
@@ -648,6 +658,24 @@ Rules:
     value["owner_request"] = str(value.get("owner_request", "")).strip()[:500]
     risk = str(value.get("risk", "medium")).lower()
     value["risk"] = risk if risk in ("low", "medium", "high") else "medium"
+    dependency = value.get("dependency_request")
+    if dependency is not None:
+        if not isinstance(dependency, dict):
+            dependency = None
+        else:
+            kind = str(dependency.get("kind", "")).strip()
+            name = str(dependency.get("name", "")).strip()
+            reason = str(dependency.get("reason", "")).strip()
+            if kind not in ("package", "service") or not name or not reason:
+                dependency = None
+            else:
+                dependency = {
+                    "kind": kind,
+                    "name": name[:160],
+                    "reason": reason[:1200],
+                }
+                value["owner_needed"] = True
+        value["dependency_request"] = dependency
     return value
 
 
@@ -1077,6 +1105,36 @@ def _auto_expand_execution_budget(
         json.dumps(changed),
     )
     return updated, context
+
+
+def _dependency_request_from_checkin(
+    plan: RemotePlan,
+    dependency: object,
+) -> dict | None:
+    if not isinstance(dependency, dict):
+        return None
+    kind = str(dependency.get("kind", "")).strip()
+    name = str(dependency.get("name", "")).strip()
+    reason = str(dependency.get("reason", "")).strip()
+    if kind == "package" and name and reason:
+        action = {"op": "package_install", "packages": [name]}
+        request = _dependency_owner_request(
+            plan,
+            action,
+            {"summary": reason},
+        )
+        request["milestone"] = plan.milestones[0] if plan.milestones else plan.goal
+        return request
+    if kind == "service" and name and reason:
+        action = {"op": "service", "service": name, "action": "enable_now"}
+        request = _dependency_owner_request(
+            plan,
+            action,
+            {"summary": reason},
+        )
+        request["milestone"] = plan.milestones[0] if plan.milestones else plan.goal
+        return request
+    return None
 
 
 def _dependency_key(action: dict) -> str | None:
@@ -1689,6 +1747,18 @@ def run_remote_plan_step(
             "risk": checkin.get("risk"),
         })[:1200],
     )
+    dependency_request = _dependency_request_from_checkin(
+        plan, checkin.get("dependency_request")
+    )
+    if dependency_request is not None:
+        dependency_request["milestone"] = plan.milestones[index]
+        remote_store.create_deviation(
+            plan.id,
+            plan.target,
+            "Qwen and Codex identified a missing required dependency",
+            dependency_request,
+        )
+        return
     if checkin.get("agreement") is False and checkin.get("better_strategy"):
         context["manager_strategy"] = str(checkin.get("better_strategy", ""))[:3000]
         review["state"] = "continue"
