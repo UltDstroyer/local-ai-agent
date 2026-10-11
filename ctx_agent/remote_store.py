@@ -8,6 +8,8 @@ import threading
 import time
 import uuid
 from pathlib import Path
+
+from .eval_events import emit_eval_event
 from .governance import valid_remote_owner_request
 
 SCHEMA = """
@@ -99,11 +101,13 @@ class RemoteStore:
                 )
 
     def event(self, plan, kind, details=""):
+        at = time.time()
         with self.lock, self.db:
             self.db.execute(
                 "INSERT INTO remote_events(plan,at,event,details) VALUES (?,?,?,?)",
-                (plan, time.time(), kind, str(details)[:6000]),
+                (plan, at, kind, str(details)[:6000]),
             )
+        emit_eval_event("remote", str(plan or ""), kind, details, at=at)
 
     # ---------------- targets ----------------
 
@@ -542,6 +546,11 @@ class RemoteStore:
     def resolve_deviation(self, did: str, approved: bool) -> bool:
         status = "approved" if approved else "rejected"
         with self.lock, self.db:
+            row = self.db.execute(
+                "SELECT plan FROM remote_deviations "
+                "WHERE id=? AND status='pending'",
+                (did,),
+            ).fetchone()
             cur = self.db.execute(
                 "UPDATE remote_deviations SET status=?,updated=? "
                 "WHERE id=? AND status='pending' "
@@ -549,7 +558,15 @@ class RemoteStore:
                 "WHERE p.id=remote_deviations.plan AND p.status='awaiting_deviation')",
                 (status, time.time(), did),
             )
-            return cur.rowcount == 1
+            ok = cur.rowcount == 1
+        if ok and row:
+            self.event(
+                row["plan"],
+                "remote_deviation_approved_by_owner" if approved
+                else "remote_deviation_rejected_by_owner",
+                did,
+            )
+        return ok
 
     def events(self, pid: str):
         with self.lock:
