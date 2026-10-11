@@ -1975,36 +1975,68 @@ def run_remote_plan_step(
                         mode,
                     )
                     if critical_review.get("internal_error"):
+                        recoveries = int(
+                            context.get("critical_review_recoveries", 0)
+                        ) + 1
+                        context["critical_review_recoveries"] = recoveries
                         context["next_guidance"] = critical_review.get(
                             "guidance", ""
                         )[:3000]
-                        remote_store.update_plan(
-                            plan.id,
-                            status="approved",
-                            attempts=0,
-                            context=context,
-                        )
+                        if recoveries <= 3:
+                            remote_store.update_plan(
+                                plan.id,
+                                status="approved",
+                                attempts=0,
+                                context=context,
+                            )
+                        else:
+                            remote_store.update_plan(
+                                plan.id,
+                                status="cancelled",
+                                context=context,
+                                result=(
+                                    "Qwen repeatedly failed to review a critical "
+                                    "remote action without producing a boss decision."
+                                ),
+                            )
                         remote_store.event(
                             plan.id,
                             "remote_critical_review_recovery",
-                            str(critical_review.get("reason", ""))[:1200],
+                            f"{recoveries}: "
+                            + str(critical_review.get("reason", ""))[:1100],
                         )
                         return
                     if not critical_review.get("needed"):
+                        disagreements = int(
+                            context.get("critical_action_disagreement_cycles", 0)
+                        ) + 1
+                        context["critical_action_disagreement_cycles"] = disagreements
                         context["next_guidance"] = (
                             critical_review.get("guidance")
                             or "Choose a non-critical approach inside existing authority."
                         )[:3000]
-                        remote_store.update_plan(
-                            plan.id,
-                            status="approved",
-                            attempts=0,
-                            context=context,
-                        )
+                        if disagreements <= 3:
+                            remote_store.update_plan(
+                                plan.id,
+                                status="approved",
+                                attempts=0,
+                                context=context,
+                            )
+                        else:
+                            remote_store.update_plan(
+                                plan.id,
+                                status="cancelled",
+                                context=context,
+                                result=(
+                                    "Codex and Qwen repeatedly disagreed about a "
+                                    "critical remote action without converging on "
+                                    "a boss decision."
+                                ),
+                            )
                         remote_store.event(
                             plan.id,
                             "remote_critical_action_rejected_by_manager",
-                            critical_reason,
+                            f"{disagreements}: {critical_reason}",
                         )
                         return
                     remote_store.create_deviation(
