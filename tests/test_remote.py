@@ -16,6 +16,7 @@ from ctx_agent.remote_orchestrator import (
     _ask_json_object,
     _json_object,
     _completion_review,
+    _human_input_error,
     _manager_scope_review,
     _remote_actions_error,
     _remote_context_dir,
@@ -557,3 +558,23 @@ class EphemeralHumanInputTests(unittest.TestCase):
         self.assertTrue(value["owner_needed"])
         self.assertEqual(value["input_request"]["key"], "cloudflare_token")
         self.assertTrue(value["input_request"]["sensitive"])
+
+
+class HumanInputBoundaryTests(unittest.TestCase):
+    def test_service_status_is_not_human_input(self):
+        request = {
+            "key": "cloudflared_status",
+            "prompt": "Is cloudflared service running and properly configured?",
+            "reason": "Needed to validate external routing.",
+            "sensitive": False,
+        }
+        self.assertIn("system state", _human_input_error(request))
+
+    def test_secret_credential_can_be_human_input(self):
+        request = {
+            "key": "cloudflare_token",
+            "prompt": "Cloudflare token",
+            "reason": "Needed to authenticate the existing tunnel.",
+            "sensitive": True,
+        }
+        self.assertIsNone(_human_input_error(request))
