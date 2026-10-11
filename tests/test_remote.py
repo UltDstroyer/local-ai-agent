@@ -231,6 +231,48 @@ class RemotePlanValidationRepairTests(unittest.TestCase):
         self.assertEqual(mocked.call_count, 1)
 
 
+    def test_remote_plan_repair_cannot_rewrite_owner_goal(self):
+        target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
+        owner_goal = "Finish rebuilding the Raspberry Pi server"
+        invalid = {
+            "goal": "",
+            "milestones": ["Configure"],
+            "verification": ["Healthy"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(
+                allowed_domains=["https://pkg.cloudflare.com"],
+            ),
+        }
+        repaired = {
+            "goal": "",
+            "milestones": ["Configure"],
+            "verification": ["Healthy"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(
+                allowed_domains=["pkg.cloudflare.com"],
+            ),
+        }
+        with patch(
+            "ctx_agent.remote_orchestrator._ask_json_object",
+            return_value=repaired,
+        ):
+            plan = _validated_remote_plan(
+                SimpleNamespace(),
+                invalid,
+                target,
+                "abc123def456",
+                owner_goal,
+                "balanced",
+            )
+        self.assertEqual(plan.goal, owner_goal)
+        self.assertEqual(
+            plan.budget.allowed_domains,
+            ("pkg.cloudflare.com",),
+        )
+
+
 class RemoteJSONTests(unittest.TestCase):
     def test_json_object_accepts_markdown_fence(self):
         self.assertEqual(
