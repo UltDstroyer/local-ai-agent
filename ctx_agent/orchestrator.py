@@ -139,7 +139,9 @@ Return exactly:
 
 Configuration, dependency, deletion, and network permissions must be false
 unless the goal clearly requires them. The budget should be tight rather than
-generous."""
+generous. Keep owner-facing text concise: goal <= 180 characters, each
+milestone <= 120 characters, and each risk/assumption/verification item <= 160
+characters."""
 
 
 def _admin_reconcile_prompt(goal: str, codex_plan: dict, files: list[str], notes: dict) -> str:
@@ -160,8 +162,9 @@ Owner notes:
 {json.dumps(notes)[:5000]}
 
 Return the same plan schema as Codex. Keep the technical plan when sound, but
-reduce unnecessary write scope and budgets. Every milestone must be concrete.
-Important deviations later require owner approval. Never silently authorize
+reduce unnecessary write scope and budgets. Every milestone must be concrete
+and concise enough to scan quickly. Important deviations later require owner
+approval. Never silently authorize
 credential access, host-wide changes, unrelated cleanup, or speculative
 refactors."""
 
