@@ -501,6 +501,53 @@ minimum required action anyway so ctx-agent can turn it into an owner-visible
 deviation request."""
 
 
+def _human_input_error(input_request: object) -> str | None:
+    if input_request is None:
+        return None
+    if not isinstance(input_request, dict):
+        return "input_request must be null or an object"
+
+    key = str(input_request.get("key", "")).strip()
+    prompt_text = str(input_request.get("prompt", "")).strip()
+    reason_text = str(input_request.get("reason", "")).strip()
+    sensitive = input_request.get("sensitive", False)
+
+    if (
+        not key
+        or len(key) > 64
+        or not key.replace("_", "").replace("-", "").isalnum()
+        or not prompt_text
+        or not reason_text
+        or type(sensitive) is not bool
+    ):
+        return "invalid input_request"
+
+    combined = (key + " " + prompt_text + " " + reason_text).lower()
+    observable_markers = (
+        " status",
+        "_status",
+        "is running",
+        "service running",
+        "properly configured",
+        "is configured",
+        "check whether",
+        "verify whether",
+        "confirm whether",
+        "what does ",
+        "show me",
+        "output of",
+        "journal",
+        "systemctl",
+    )
+    if any(marker in combined for marker in observable_markers):
+        return (
+            "input_request asks the owner for system state that Qwen/Codex "
+            "must inspect themselves"
+        )
+
+    return None
+
+
 def _completion_review(
     settings, plan: RemotePlan, milestone: str, results: list[dict],
     inspection: str, mode: str,
@@ -529,7 +576,9 @@ Return JSON only:
 
 Set owner_needed=true only when you genuinely need a new boss decision,
 permission, or one human-only input. Technical debugging and choosing a new
-implementation approach are your job with Codex.
+implementation approach are your job with Codex. Never ask the boss for
+observable machine state such as whether a service is running, configured,
+reachable, healthy, or what a command returned. Inspect those yourself.
 
 If a human-only input is required, input_request must be exactly one object:
 {{
@@ -559,36 +608,27 @@ strategy before escalating to the owner."""
         if value.get("state") not in ("complete", "continue", "blocked"):
             raise ValueError("bad completion state")
         value["owner_needed"] = value.get("owner_needed") is True
-        value["owner_request"] = str(value.get("owner_request", "")).strip()[:500]
+        owner_request = value.get("owner_request", "")
+        if not isinstance(owner_request, str):
+            owner_request = ""
+        value["owner_request"] = owner_request.strip()[:500]
         risk = str(value.get("risk", "medium")).lower()
         value["risk"] = risk if risk in ("low", "medium", "high") else "medium"
         input_request = value.get("input_request")
+        input_error = _human_input_error(input_request)
+        if input_error:
+            raise ValueError(input_error)
         if input_request is not None:
-            if not isinstance(input_request, dict):
-                raise ValueError("input_request must be null or an object")
-            key = str(input_request.get("key", "")).strip()
-            prompt_text = str(input_request.get("prompt", "")).strip()
-            reason_text = str(input_request.get("reason", "")).strip()
-            sensitive = input_request.get("sensitive", False)
-            if (
-                not key
-                or len(key) > 64
-                or not key.replace("_", "").replace("-", "").isalnum()
-                or not prompt_text
-                or not reason_text
-                or type(sensitive) is not bool
-            ):
-                raise ValueError("invalid input_request")
             value["input_request"] = {
-                "key": key,
-                "prompt": prompt_text[:300],
-                "reason": reason_text[:600],
-                "sensitive": sensitive,
+                "key": str(input_request["key"]).strip(),
+                "prompt": str(input_request["prompt"]).strip()[:300],
+                "reason": str(input_request["reason"]).strip()[:600],
+                "sensitive": input_request.get("sensitive", False),
             }
             value["owner_needed"] = True
             if not value["owner_request"]:
                 value["owner_request"] = (
-                    "Allow Qwen to request one human-only input needed for this step."
+                    "Allow me to request one human-only input needed for this step."
                 )
         if value["owner_needed"] and not value["owner_request"]:
             raise ValueError("owner_needed requires one concrete owner_request")
@@ -648,7 +688,9 @@ Return JSON only:
 
 If one human-only input is required for the new strategy, input_request must
 contain exactly key, prompt, reason, and sensitive. Ask for only one value.
-Never include or infer the value itself."""
+Never include or infer the value itself. Never ask the owner for observable
+machine state such as service status, configuration state, logs, reachability,
+or command output. Qwen and Codex must inspect those themselves."""
     return _ask_json_object(
         settings,
         [
