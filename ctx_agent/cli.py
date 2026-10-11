@@ -592,7 +592,7 @@ def main(argv=None):
             print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0
     except (OSError, RuntimeError, ValueError, KeyError) as exc:
-        print("ctx-agent:", exc, file=sys.stderr)
+        print("[Qwen manager]", str(exc), file=sys.stderr)
         return 1
 
 
