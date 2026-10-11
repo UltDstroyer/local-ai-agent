@@ -12,7 +12,11 @@ from ctx_agent.remote import (
     RemoteTarget,
     validate_remote_action,
 )
-from ctx_agent.remote_orchestrator import _json_object, _remote_context_dir
+from ctx_agent.remote_orchestrator import (
+    _ask_json_object,
+    _json_object,
+    _remote_context_dir,
+)
 from ctx_agent.remote_store import RemoteStore
 from ctx_agent.ssh_bridge import SSHBridge, SSHBridgeError, _ssh_base
 
@@ -115,6 +119,22 @@ class RemoteJSONTests(unittest.TestCase):
         with self.assertRaises(RemoteContractError):
             _json_object('{"goal": "media",}')
 
+
+
+class RemoteJSONRetryTests(unittest.TestCase):
+    def test_structured_json_retries_once_with_larger_limits(self):
+        settings = SimpleNamespace()
+        malformed = {"content": '{"goal": "media",'}
+        valid = {"content": '{"goal": "media"}'}
+        with patch(
+            "ctx_agent.remote_orchestrator.ask",
+            side_effect=[malformed, valid],
+        ) as mocked:
+            value = _ask_json_object(settings, [{"role": "system", "content": "JSON"}], "balanced")
+        self.assertEqual(value, {"goal": "media"})
+        self.assertEqual(mocked.call_count, 2)
+        self.assertEqual(mocked.call_args.kwargs["num_predict"], 3072)
+        self.assertEqual(mocked.call_args.kwargs["num_ctx"], 8192)
 
 
 class RemoteWorkspaceTests(unittest.TestCase):
