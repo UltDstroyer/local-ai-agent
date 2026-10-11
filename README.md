@@ -115,9 +115,10 @@ Start planning:
     ctx switch demo
     ctx agent plan "Implement the requested feature"
 
-During planning the CLI now prints live stage updates, elapsed time, and a rough
-time-left estimate. Once Codex has drafted the plan it also prints the proposed
-execution stages.
+During planning the CLI prints throttled stage updates, elapsed time, and a rough
+time-left estimate. Once Codex has drafted the plan it also prints short proposed
+execution stages. Owner-facing plan output is concise by default; the complete
+machine-readable contract remains stored internally.
 
 1. Codex inspects the sanitized managed project read-only and proposes a plan.
 2. The local administrator reviews and narrows the plan.
@@ -317,9 +318,9 @@ Watch planning or execution progress:
 
     ctx agent progress --target pi
 
-This reports the current remote stage, the full stage list, elapsed time, and a
-rough remaining-work estimate. The plan-show output also embeds the same
-progress snapshot.
+This reports the current remote stage, a concise stage list, elapsed time, and a
+rough remaining-work estimate. Plan and approval commands show a short owner
+summary rather than dumping the full contract.
 
 Approve it:
 
@@ -329,6 +330,11 @@ Approve it:
 Only maximum mode leases remote milestones. Codex remains the primary engineer,
 but it cannot call SSH directly. It proposes typed actions and ctx-agent checks
 them against the owner-approved contract before the SSH bridge executes them.
+
+Owner-facing plan and deviation output is intentionally concise. Remote
+deviations are summarized by the local Qwen administrator instead of printing
+raw command transcripts and logs.
+
 
 The normal typed action vocabulary supports:
 
