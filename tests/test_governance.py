@@ -204,6 +204,19 @@ class BossViewTests(unittest.TestCase):
         }))
 
 
+    def test_observable_credential_path_input_is_not_boss_eligible(self):
+        self.assertFalse(valid_remote_owner_request({
+            "type": "human_input",
+            "boss_request": "Allow me to ask for one Cloudflare input.",
+            "input_request": {
+                "key": "cloudflare_credentials_path",
+                "prompt": "Cloudflare Tunnel credential path",
+                "reason": "Needed to locate the credential file on the Pi.",
+                "sensitive": False,
+            },
+        }))
+
+
 if __name__ == "__main__":
     unittest.main()
 
