@@ -706,9 +706,38 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
         report = analyze_changes(source, workspace)
         violations = contract_violations(plan, report)
         if violations:
-            request = deviation_amendment(plan, report, "; ".join(violations))
-            store.create_deviation(plan.id, plan.project, "; ".join(violations), request)
-            return
+            reason = "; ".join(violations)
+            request = deviation_amendment(plan, report, reason)
+            manager = _manager_amendment_review(
+                settings,
+                plan,
+                request,
+                "final scope verification",
+                mode,
+            )
+            if manager["approve"]:
+                plan = apply_amendment(plan, request)
+                store.update_plan(plan.id, plan=plan.to_dict())
+                store.event(
+                    plan.id,
+                    "final_scope_approved_by_manager",
+                    json.dumps({
+                        "reason": manager["reason"],
+                        "amendment": request,
+                    })[:5000],
+                )
+                report = analyze_changes(source, workspace)
+                violations = contract_violations(plan, report)
+            if violations:
+                request["manager_review"] = manager
+                request["suggested_action"] = (
+                    "Qwen reviewed the final scope change and determined that "
+                    "it requires owner authority."
+                )
+                store.create_deviation(
+                    plan.id, plan.project, "; ".join(violations), request
+                )
+                return
         _, patch = diff(source, workspace)
         review = bridge_call(
             settings.codex_bridge_socket,
@@ -956,14 +985,17 @@ def approve_deviation(settings, store, source: Path, did: str) -> dict:
     row = store.get_plan(deviation["plan"])
     if not row:
         raise OrchestrationError("deviation refers to missing plan")
-    plan = _plan_from_row(row)
     request = deviation["request"]
+    if not store.resolve_deviation(did, True):
+        raise OrchestrationError("deviation changed concurrently")
+    current_row = store.get_plan(deviation["plan"])
+    if not current_row:
+        raise OrchestrationError("plan disappeared after deviation approval")
+    plan = _plan_from_row(current_row)
     if request.get("type") != "stalled":
         plan = apply_amendment(plan, request)
         store.update_plan(plan.id, plan=plan.to_dict())
-    if not store.resolve_deviation(did, True):
-        raise OrchestrationError("deviation changed concurrently")
-    context = dict(row.get("context", {}))
+    context = dict(current_row.get("context", {}))
     context["next_guidance"] = str(request.get(
         "suggested_action",
         "Continue under the newly approved mutation lease.",
@@ -980,14 +1012,19 @@ def reject_deviation(settings, store, source: Path, did: str) -> dict:
     row = store.get_plan(deviation["plan"])
     if not row:
         raise OrchestrationError("deviation refers to missing plan")
-    restore_checkpoint(settings, source, row)
     if not store.resolve_deviation(did, False):
         raise OrchestrationError("deviation changed concurrently")
-    context = dict(row.get("context", {}))
+    current_row = store.get_plan(deviation["plan"])
+    if not current_row:
+        raise OrchestrationError("plan disappeared after deviation rejection")
+    restore_checkpoint(settings, source, current_row)
+    context = dict(current_row.get("context", {}))
     context["next_guidance"] = (
         "Owner rejected the requested deviation. Find an alternative that stays "
         "strictly inside the original approved mutation lease."
     )
-    store.update_plan(row["id"], status="approved", attempts=0, context=context)
-    store.event(row["id"], "deviation_rejected_by_owner", did)
-    return store.get_plan(row["id"])
+    store.update_plan(
+        current_row["id"], status="approved", attempts=0, context=context
+    )
+    store.event(current_row["id"], "deviation_rejected_by_owner", did)
+    return store.get_plan(current_row["id"])
