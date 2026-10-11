@@ -64,11 +64,38 @@ class RemoteStore:
         self.db.row_factory = sqlite3.Row
         with self.lock, self.db:
             self.db.executescript(SCHEMA)
+            interrupted = [
+                row["id"] for row in self.db.execute(
+                    "SELECT id FROM remote_plans WHERE status='running'"
+                ).fetchall()
+            ]
+            now = time.time()
             self.db.execute(
                 "UPDATE remote_plans SET status='approved',updated=? "
                 "WHERE status='running'",
-                (time.time(),),
+                (now,),
             )
+            for pid in interrupted:
+                row = self.db.execute(
+                    "SELECT context_json FROM remote_plans WHERE id=?", (pid,)
+                ).fetchone()
+                context = json.loads(row["context_json"]) if row else {}
+                context["next_guidance"] = (
+                    "The coordinator restarted during this milestone. Re-inspect "
+                    "the target before retrying and do not assume the previous "
+                    "remote action completed."
+                )
+                self.db.execute(
+                    "UPDATE remote_plans SET context_json=?,updated=? WHERE id=?",
+                    (json.dumps(context), now, pid),
+                )
+                self.db.execute(
+                    "INSERT INTO remote_events(plan,at,event,details) VALUES (?,?,?,?)",
+                    (
+                        pid, now, "remote_plan_recovered_after_restart",
+                        "Interrupted running lease was safely re-queued for fresh inspection.",
+                    ),
+                )
 
     def event(self, plan, kind, details=""):
         with self.lock, self.db:
@@ -281,6 +308,19 @@ class RemoteStore:
             )
         self.event(plan, "remote_deviation_requested", did + ": " + reason[:1000])
         return did
+
+    def pending_deviation(self, plan: str):
+        with self.lock:
+            row = self.db.execute(
+                "SELECT * FROM remote_deviations "
+                "WHERE plan=? AND status='pending' ORDER BY created DESC LIMIT 1",
+                (plan,),
+            ).fetchone()
+        if not row:
+            return None
+        value = dict(row)
+        value["request"] = json.loads(value.pop("request_json"))
+        return value
 
     def get_deviation(self, did: str):
         with self.lock:
