@@ -510,7 +510,8 @@ class Coordinator:
         if op in (
             "remote_plan_show", "remote_plan_approve",
             "remote_plan_reject", "remote_plan_cancel",
-            "remote_plan_retry_internal", "remote_plan_events",
+            "remote_plan_retry_internal", "remote_plan_prepare_recovery",
+            "remote_plan_events",
         ):
             target_name = data.get("target", "")
             pid = data.get("id", "")
@@ -547,17 +548,13 @@ class Coordinator:
                         self.remote_store.get_plan(row["id"])
                     )
                 }
-            if op == "remote_plan_retry_internal":
-                with self.execution_lock:
-                    if not self.remote_store.retry_internal_plan(row["id"]):
-                        raise ValueError(
-                            "Remote plan is not an internally failed/recoverable plan"
-                        )
-                return {
-                    "plan": self._remote_plan_view(
-                        self.remote_store.get_plan(row["id"])
-                    )
-                }
+            if op == "remote_plan_prepare_recovery":
+                if row.get("status") not in ("failed_internal", "cancelled"):
+                    raise ValueError("Remote plan does not need a recovery proposal")
+                successor = self._prepare_remote_recovery_plan(row)
+                if not successor:
+                    raise ValueError("Could not prepare remote recovery plan")
+                return {"plan": self._remote_plan_view(successor)}
             with self.execution_lock:
                 if not self.remote_store.cancel_plan(row["id"]):
                     raise ValueError(
@@ -782,7 +779,8 @@ class Coordinator:
             raise ValueError("No planning task or plan for project")
         if op in (
             "plan_show", "plan_approve", "plan_reject", "plan_cancel",
-            "plan_retry_internal", "plan_diff", "plan_apply",
+            "plan_retry_internal", "plan_prepare_recovery",
+            "plan_diff", "plan_apply",
         ):
             project = data.get("project", "")
             source = self.project(project)
@@ -803,13 +801,13 @@ class Coordinator:
                 if not self.store.reject_plan(pid):
                     raise ValueError("Plan is not awaiting approval")
                 return {"plan": self._plan_view(self.store.get_plan(pid))}
-            if op == "plan_retry_internal":
-                with self.execution_lock:
-                    if not self.store.retry_internal_plan(pid):
-                        raise ValueError(
-                            "Plan is not an internally failed/recoverable plan"
-                        )
-                return {"plan": self._plan_view(self.store.get_plan(pid))}
+            if op == "plan_prepare_recovery":
+                if row.get("status") not in ("failed_internal", "cancelled"):
+                    raise ValueError("Plan does not need a recovery proposal")
+                successor = self._prepare_local_recovery_plan(row)
+                if not successor:
+                    raise ValueError("Could not prepare recovery plan")
+                return {"plan": self._plan_view(successor)}
             if op == "plan_cancel":
                 with self.execution_lock:
                     if not self.store.cancel_plan(pid):
@@ -1109,7 +1107,10 @@ class Coordinator:
                             inputs=dict(self.remote_inputs.get(row["id"], {})),
                         )
                     current = self.remote_store.get_plan(row["id"])
-                    if current and current.get("status") in (
+                    if current and current.get("status") == "failed_internal":
+                        self.remote_inputs.pop(row["id"], None)
+                        self._prepare_remote_recovery_plan(current)
+                    elif current and current.get("status") in (
                         "completed", "cancelled", "rejected"
                     ):
                         self.remote_inputs.pop(row["id"], None)
@@ -1308,6 +1309,9 @@ class Coordinator:
                         run_plan_step(
                             self.settings, self.store, source, row, self.mode
                         )
+                    current = self.store.get_plan(row["id"])
+                    if current and current.get("status") == "failed_internal":
+                        self._prepare_local_recovery_plan(current)
                 except Exception as exc:
                     current = self.store.get_plan(row["id"])
                     if current and current["status"] == "running":
