@@ -72,6 +72,10 @@ def _resolve_action_inputs(action: dict, inputs: dict[str, str]) -> dict:
     for field in ("command", "content", "url", "path"):
         if field in resolved and isinstance(resolved[field], str):
             resolved[field] = _resolve_inputs(resolved[field], inputs)
+            if "{{input:" in resolved[field]:
+                raise SSHBridgeError(
+                    "required human input is unavailable; request it from the owner again"
+                )
     return resolved
 
 
