@@ -8,7 +8,7 @@ from contextlib import redirect_stderr
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from ctx_agent.cli import _print_live_deviation
+from ctx_agent.cli import _print_live_deviation, _prompt_human_input
 from ctx_agent.manager_brief import manager_deviation_brief
 
 
@@ -126,3 +126,27 @@ class BossDecisionOutputTests(unittest.TestCase):
         approved = text.index('print("[Qwen manager] approved"')
         watcher = text.index("_follow_approved_plan(args.socket, plan, remote=remote)")
         self.assertLess(approved, watcher)
+
+
+class HumanInputPromptTests(unittest.TestCase):
+    def test_sensitive_prompt_uses_hidden_input(self):
+        request = {
+            "prompt": "Cloudflare token",
+            "reason": "Needed for the existing tunnel.",
+            "sensitive": True,
+        }
+        with patch("ctx_agent.cli.getpass.getpass", return_value="hidden") as mocked:
+            value = _prompt_human_input(request)
+        self.assertEqual(value, "hidden")
+        mocked.assert_called_once()
+
+    def test_non_sensitive_prompt_uses_standard_input(self):
+        request = {
+            "prompt": "Tunnel name",
+            "reason": "Needed to select the existing tunnel.",
+            "sensitive": False,
+        }
+        with patch("builtins.input", return_value="media") as mocked:
+            value = _prompt_human_input(request)
+        self.assertEqual(value, "media")
+        mocked.assert_called_once()
