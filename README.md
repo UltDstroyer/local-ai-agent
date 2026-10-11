@@ -115,6 +115,10 @@ Start planning:
     ctx switch demo
     ctx agent plan "Implement the requested feature"
 
+ctx-agent allows only one active plan at a time. Once a task exists, normal
+commands operate on that current task automatically, so you do not need project
+names, target names, plan IDs, or deviation IDs for routine work.
+
 During planning the CLI prints throttled stage updates, elapsed time, and a rough
 time-left estimate. Once Codex has drafted the plan it also prints short proposed
 execution stages. Owner-facing plan output is concise by default; the complete
@@ -126,14 +130,26 @@ machine-readable contract remains stored internally.
 4. Nothing is modified yet.
 5. The plan is shown to the owner and waits for approval.
 
-Check progress from another terminal at any time:
+Check the current task from another terminal at any time:
+
+    ctx agent status
+
+or:
 
     ctx agent progress
 
-The progress report shows the current stage, all planned execution stages,
-elapsed time, estimated work remaining, and whether progress is waiting on
-owner approval, maximum mode, or a deviation decision. Estimates are deliberately
-rough and update using observed durations as stages finish.
+The progress dashboard shows a progress bar, current stage, elapsed time,
+estimated work remaining, concise stage states, and any owner decision that is
+blocking progress. When approval is required it prints the exact simple action:
+
+    ctx agent approve
+
+or:
+
+    ctx agent reject
+
+Estimates are deliberately rough and update using observed durations as stages
+finish.
 
 Inspect it:
 
@@ -301,30 +317,29 @@ Before planning, inspect it read-only:
 The broker collects OS, disk, mount, listener, command, and common-service
 information without changing the remote machine.
 
-Create an owner-reviewed remote plan:
+After one-time target registration, create an owner-reviewed remote plan with:
 
-    ctx agent plan --target pi       "Set up Jellyfin, nginx, and Cloudflare Tunnel as a reliable media server"
+    ctx agent plan "Set up Jellyfin, nginx, and Cloudflare Tunnel as a reliable media server"
 
-Codex receives the read-only inspection and proposes the technical plan. The
-local Qwen administrator narrows that plan into a remote mutation budget. The
-budget explicitly lists remote paths, services, packages, network permission,
-sudo permission, and action limits.
+If there is no active local project and exactly one SSH target is registered,
+ctx-agent selects that target automatically. Codex receives the read-only
+inspection and proposes the technical plan. The local Qwen administrator narrows
+that plan into a remote mutation budget.
 
-Review it:
+Routine control is target-free:
 
-    ctx agent plan --target pi show
+    ctx agent plan show
+    ctx agent status
+    ctx agent approve
+    ctx agent reject
+    ctx agent deviations
 
-Watch planning or execution progress:
-
-    ctx agent progress --target pi
-
-This reports the current remote stage, a concise stage list, elapsed time, and a
-rough remaining-work estimate. Plan and approval commands show a short owner
+The same commands work for local project plans. ctx-agent resolves the one
+current task automatically. Plan and approval commands show a short owner
 summary rather than dumping the full contract.
 
-Approve it:
+Approved plans execute autonomously in maximum mode:
 
-    ctx agent approve --target pi
     ctx agent mode maximum
 
 Only maximum mode leases remote milestones. Codex remains the primary engineer,
