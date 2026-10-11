@@ -737,6 +737,16 @@ class HumanInputBoundaryTests(unittest.TestCase):
         self.assertIsNone(_human_input_error(request))
 
 
+    def test_human_input_request_cannot_bundle_username_and_password(self):
+        request = {
+            "key": "login_credentials",
+            "prompt": "Enter username and password",
+            "reason": "Needed to authenticate.",
+            "sensitive": True,
+        }
+        self.assertIn("multiple human values", _human_input_error(request))
+
+
 class RemoteDependencyApprovalTests(unittest.TestCase):
     def test_cloudflared_install_is_owner_gated_even_when_budget_allows_it(self):
         plan = RemotePlan.from_dict({
