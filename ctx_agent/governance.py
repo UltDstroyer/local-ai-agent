@@ -7,6 +7,7 @@ owner.
 
 from __future__ import annotations
 
+import hashlib
 
 REMOTE_OWNER_TYPES = {
     "remote_scope",
@@ -44,6 +45,28 @@ _INTERNAL_DECISION_MARKERS = (
     "file-write budget",
     "file write budget",
 )
+
+
+def owner_decision_key(request: object) -> str:
+    """Stable identity for one boss question, independent of explanatory prose."""
+    if not isinstance(request, dict):
+        return ""
+    input_request = request.get("input_request")
+    if isinstance(input_request, dict):
+        key = input_request.get("key")
+        if isinstance(key, str) and key.strip():
+            return "input:" + key.strip().lower()
+    kind = request.get("type")
+    boss_request = request.get("boss_request")
+    if not isinstance(kind, str) or not isinstance(boss_request, str):
+        return ""
+    normalized = " ".join(boss_request.lower().split())
+    if not normalized:
+        return ""
+    digest = hashlib.sha256(
+        (kind.strip().lower() + "\n" + normalized).encode()
+    ).hexdigest()[:32]
+    return "decision:" + digest
 
 
 def owner_request_is_internal(text: object) -> bool:
