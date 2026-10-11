@@ -200,6 +200,7 @@ def create_remote_plan(
     target: RemoteTarget,
     goal: str,
     mode: str,
+    progress=None,
 ) -> dict:
     if settings.codex_bridge_socket is None:
         raise RemoteOrchestrationError("Codex bridge is not configured")
@@ -211,12 +212,16 @@ def create_remote_plan(
             "Codex is not authenticated. Run ctx agent codex login first."
         )
 
+    if progress:
+        progress(0, None)
     inspection = inspect_target(settings, target)
     pid = uuid.uuid4().hex[:12]
     context_dir = _save_inspection(
         settings, pid, target.to_dict(), inspection
     )
 
+    if progress:
+        progress(1, None)
     codex = bridge_call(
         settings.codex_bridge_socket,
         {
@@ -237,6 +242,8 @@ def create_remote_plan(
     candidate = _json_object(codex.get("message", ""))
     if isinstance(candidate.get("plan"), dict):
         candidate = candidate["plan"]
+    if progress:
+        progress(2, candidate.get("milestones", []))
 
     admin_message = ask(
         settings,
@@ -264,6 +271,8 @@ def create_remote_plan(
     )
     admin = _json_object(str(admin_message.get("content", "")))
     plan = RemotePlan.from_dict(admin, target.name, pid)
+    if progress:
+        progress(3, list(plan.milestones))
 
     agreement = bridge_call(
         settings.codex_bridge_socket,
