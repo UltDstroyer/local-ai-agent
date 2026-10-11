@@ -7,6 +7,7 @@ import json
 import os
 import socketserver
 import threading
+import time
 from pathlib import Path
 
 from .agent import run_agent
@@ -30,6 +31,12 @@ from .remote_orchestrator import (
     run_remote_plan_step,
 )
 from .remote_store import RemoteStore
+from .progress import (
+    LOCAL_PLANNING_STAGES,
+    REMOTE_PLANNING_STAGES,
+    plan_snapshot,
+    planning_snapshot,
+)
 from .runtime import Settings, valid_name
 from .snapshot import SnapshotError, apply, create, diff, inventory, project_path
 from .ssh_bridge import SSHBridgeError
@@ -73,9 +80,76 @@ class Coordinator:
         self.shutdown = threading.Event()
         self.lock = threading.RLock()
         self.execution_lock = threading.RLock()
+        self.planning_progress = {}
 
     def project(self, name):
         return project_path(self.settings.projects_dir, name)
+
+    def _planning_key(self, kind: str, scope: str):
+        return (kind, scope)
+
+    def _planning_start(self, kind: str, scope: str):
+        specs = REMOTE_PLANNING_STAGES if kind == "remote_plan" else LOCAL_PLANNING_STAGES
+        now = time.time()
+        state = {
+            "kind": kind,
+            "scope": scope,
+            "stages": [
+                {"name": name, "estimated_seconds": seconds}
+                for name, seconds in specs
+            ],
+            "stage_index": 0,
+            "started_at": now,
+            "stage_started_at": now,
+            "planned_stages": [],
+            "active": True,
+            "status": "running",
+        }
+        with self.lock:
+            self.planning_progress[self._planning_key(kind, scope)] = state
+
+    def _planning_update(
+        self, kind: str, scope: str, stage_index: int, planned_stages=None
+    ):
+        with self.lock:
+            state = self.planning_progress.get(self._planning_key(kind, scope))
+            if not state:
+                return
+            if int(stage_index) != int(state.get("stage_index", 0)):
+                state["stage_index"] = int(stage_index)
+                state["stage_started_at"] = time.time()
+            if isinstance(planned_stages, (list, tuple)):
+                state["planned_stages"] = [
+                    str(x) for x in planned_stages if str(x).strip()
+                ][:50]
+
+    def _planning_finish(self, kind: str, scope: str, status: str, error: str = ""):
+        with self.lock:
+            state = self.planning_progress.get(self._planning_key(kind, scope))
+            if not state:
+                return
+            state["active"] = False
+            state["status"] = status
+            state["phase"] = status
+            if error:
+                state["error"] = error[:2000]
+
+    def _planning_view(self, kind: str, scope: str):
+        with self.lock:
+            state = self.planning_progress.get(self._planning_key(kind, scope))
+            if not state:
+                return None
+            snapshot = dict(state)
+            snapshot["stages"] = [dict(x) for x in state.get("stages", [])]
+            snapshot["planned_stages"] = list(state.get("planned_stages", []))
+        return planning_snapshot(snapshot)
+
+    def _planning_active_count(self) -> int:
+        with self.lock:
+            return sum(
+                1 for state in self.planning_progress.values()
+                if state.get("active")
+            )
 
     def _plan(self, project: str, pid: str = ""):
         if pid:
@@ -101,6 +175,27 @@ class Coordinator:
             report = analyze_changes(self.project(row["project"]), workspace)
             value["mutation_usage"] = report.to_dict()
         value["deviations"] = self.store.list_deviations(plan=row["id"])[:10]
+        value["progress"] = plan_snapshot(
+            row,
+            self.store.events(row["id"]),
+            remote=False,
+            mode=self.mode,
+            paused=self.paused,
+        )
+        return value
+
+    def _remote_plan_view(self, row: dict) -> dict:
+        value = dict(row)
+        value["deviations"] = self.remote_store.list_deviations(
+            plan=row["id"]
+        )[:10]
+        value["progress"] = plan_snapshot(
+            row,
+            self.remote_store.events(row["id"]),
+            remote=True,
+            mode=self.mode,
+            paused=self.paused,
+        )
         return value
 
     def dispatch(self, data: dict):
@@ -129,6 +224,7 @@ class Coordinator:
                 "remote_targets": len(self.remote_store.list_targets()),
                 "ssh_bridge_configured": self.settings.ssh_bridge_socket is not None,
                 "autonomous_execution": self.mode == "maximum",
+                "planning_tasks": self._planning_active_count(),
             }
         if op == "mode":
             mode = data.get("mode")
@@ -198,20 +294,54 @@ class Coordinator:
                 raise ValueError("Unknown SSH target")
             if not isinstance(goal, str) or not 1 <= len(goal) <= 6000:
                 raise ValueError("Goal must be 1 to 6000 characters")
-            row = create_remote_plan(
-                self.settings,
-                self.remote_store,
-                RemoteTarget.from_dict(target_raw),
-                goal,
-                self.mode,
-            )
-            return {"plan": row}
+            self._planning_start("remote_plan", target_name)
+            try:
+                row = create_remote_plan(
+                    self.settings,
+                    self.remote_store,
+                    RemoteTarget.from_dict(target_raw),
+                    goal,
+                    self.mode,
+                    progress=lambda index, stages=None: self._planning_update(
+                        "remote_plan", target_name, index, stages
+                    ),
+                )
+            except Exception as exc:
+                self._planning_finish(
+                    "remote_plan", target_name, "failed", str(exc)
+                )
+                raise
+            self._planning_finish("remote_plan", target_name, "finished")
+            return {"plan": self._remote_plan_view(row)}
         if op == "remote_plan_list":
             return {
                 "plans": self.remote_store.list_plans(
                     target=data.get("target") or None
                 )
             }
+        if op == "remote_plan_progress":
+            target_name = data.get("target", "")
+            active = self._planning_view("remote_plan", target_name)
+            if active and active.get("status") == "running":
+                return {"progress": active}
+            pid = data.get("id", "")
+            row = (
+                self.remote_store.get_plan(pid)
+                if pid else self.remote_store.latest_plan(target_name)
+            )
+            if row and (not target_name or row["target"] == target_name):
+                return {
+                    "progress": plan_snapshot(
+                        row,
+                        self.remote_store.events(row["id"]),
+                        remote=True,
+                        mode=self.mode,
+                        paused=self.paused,
+                    )
+                }
+            if active:
+                return {"progress": active}
+            raise ValueError("No remote planning task or plan for target")
         if op in (
             "remote_plan_show", "remote_plan_approve",
             "remote_plan_reject", "remote_plan_cancel",
@@ -226,11 +356,7 @@ class Coordinator:
             if not row or (target_name and row["target"] != target_name):
                 raise ValueError("No such remote plan")
             if op == "remote_plan_show":
-                value = dict(row)
-                value["deviations"] = self.remote_store.list_deviations(
-                    plan=row["id"]
-                )[:10]
-                return {"plan": value}
+                return {"plan": self._remote_plan_view(row)}
             if op == "remote_plan_events":
                 return {
                     "events": self.remote_store.events(row["id"])
@@ -240,18 +366,30 @@ class Coordinator:
                     raise ValueError(
                         "Remote plan is not awaiting initial approval"
                     )
-                return {"plan": self.remote_store.get_plan(row["id"])}
+                return {
+                    "plan": self._remote_plan_view(
+                        self.remote_store.get_plan(row["id"])
+                    )
+                }
             if op == "remote_plan_reject":
                 if not self.remote_store.reject_plan(row["id"]):
                     raise ValueError(
                         "Remote plan is not awaiting initial approval"
                     )
-                return {"plan": self.remote_store.get_plan(row["id"])}
+                return {
+                    "plan": self._remote_plan_view(
+                        self.remote_store.get_plan(row["id"])
+                    )
+                }
             if not self.remote_store.cancel_plan(row["id"]):
                 raise ValueError(
                     "Remote plan cannot be cancelled in its current state"
                 )
-            return {"plan": self.remote_store.get_plan(row["id"])}
+            return {
+                "plan": self._remote_plan_view(
+                    self.remote_store.get_plan(row["id"])
+                )
+            }
 
         if op == "remote_deviation_list":
             return {
@@ -333,13 +471,49 @@ class Coordinator:
                 raise ValueError("Unknown project")
             if not isinstance(goal, str) or not 1 <= len(goal) <= 6000:
                 raise ValueError("Goal must be 1 to 6000 characters")
-            row = create_negotiated_plan(
-                self.settings, self.store, source, project, goal, self.mode
-            )
+            self._planning_start("project_plan", project)
+            try:
+                row = create_negotiated_plan(
+                    self.settings,
+                    self.store,
+                    source,
+                    project,
+                    goal,
+                    self.mode,
+                    progress=lambda index, stages=None: self._planning_update(
+                        "project_plan", project, index, stages
+                    ),
+                )
+            except Exception as exc:
+                self._planning_finish(
+                    "project_plan", project, "failed", str(exc)
+                )
+                raise
+            self._planning_finish("project_plan", project, "finished")
             return {"plan": self._plan_view(row)}
         if op == "plan_list":
             project = data.get("project") or None
             return {"plans": self.store.list_plans(project=project)}
+        if op == "plan_progress":
+            project = data.get("project", "")
+            active = self._planning_view("project_plan", project)
+            if active and active.get("status") == "running":
+                return {"progress": active}
+            pid = data.get("id", "")
+            row = self.store.get_plan(pid) if pid else self.store.latest_plan(project)
+            if row and (not project or row["project"] == project):
+                return {
+                    "progress": plan_snapshot(
+                        row,
+                        self.store.events(row["id"]),
+                        remote=False,
+                        mode=self.mode,
+                        paused=self.paused,
+                    )
+                }
+            if active:
+                return {"progress": active}
+            raise ValueError("No planning task or plan for project")
         if op in (
             "plan_show", "plan_approve", "plan_reject", "plan_cancel",
             "plan_diff", "plan_apply",

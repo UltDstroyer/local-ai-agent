@@ -115,13 +115,24 @@ Start planning:
     ctx switch demo
     ctx agent plan "Implement the requested feature"
 
-During planning:
+During planning the CLI now prints live stage updates, elapsed time, and a rough
+time-left estimate. Once Codex has drafted the plan it also prints the proposed
+execution stages.
 
 1. Codex inspects the sanitized managed project read-only and proposes a plan.
 2. The local administrator reviews and narrows the plan.
 3. A machine-readable mutation budget is stored.
 4. Nothing is modified yet.
 5. The plan is shown to the owner and waits for approval.
+
+Check progress from another terminal at any time:
+
+    ctx agent progress
+
+The progress report shows the current stage, all planned execution stages,
+elapsed time, estimated work remaining, and whether progress is waiting on
+owner approval, maximum mode, or a deviation decision. Estimates are deliberately
+rough and update using observed durations as stages finish.
 
 Inspect it:
 
@@ -142,6 +153,7 @@ and stops on material deviations.
 
 Useful commands:
 
+    ctx agent progress
     ctx agent plan show
     ctx agent plan diff
     ctx agent deviations
@@ -298,6 +310,14 @@ sudo permission, and action limits.
 Review it:
 
     ctx agent plan --target pi show
+
+Watch planning or execution progress:
+
+    ctx agent progress --target pi
+
+This reports the current remote stage, the full stage list, elapsed time, and a
+rough remaining-work estimate. The plan-show output also embeds the same
+progress snapshot.
 
 Approve it:
 
