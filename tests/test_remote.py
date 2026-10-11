@@ -16,6 +16,8 @@ from ctx_agent.remote_orchestrator import (
     _ask_json_object,
     _json_object,
     _completion_review,
+    _dependency_key,
+    _dependency_owner_request,
     _human_input_error,
     _manager_scope_review,
     _remote_actions_error,
@@ -578,3 +580,77 @@ class HumanInputBoundaryTests(unittest.TestCase):
             "sensitive": True,
         }
         self.assertIsNone(_human_input_error(request))
+
+
+class RemoteDependencyApprovalTests(unittest.TestCase):
+    def test_cloudflared_install_is_owner_gated_even_when_budget_allows_it(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Expose Jellyfin through Cloudflare",
+            "milestones": ["Configure Cloudflare Tunnel"],
+            "verification": ["External HTTPS works"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(),
+        }, "pi")
+        action = {"op": "package_install", "packages": ["cloudflared"]}
+        self.assertEqual(_dependency_key(action), "packages:cloudflared")
+        request = _dependency_owner_request(
+            plan,
+            action,
+            {"summary": "Cloudflared is absent and the tunnel requires it."},
+        )
+        self.assertEqual(request["type"], "dependency_install")
+        self.assertIn("cloudflared", request["boss_request"])
+        self.assertIn("download and install", request["boss_request"])
+
+    def test_new_service_activation_is_owner_gated(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Expose Jellyfin through Cloudflare",
+            "milestones": ["Configure Cloudflare Tunnel"],
+            "verification": ["Tunnel active"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(),
+        }, "pi")
+        action = {
+            "op": "service",
+            "service": "cloudflared.service",
+            "action": "enable_now",
+        }
+        self.assertEqual(_dependency_key(action), "service:cloudflared")
+        request = _dependency_owner_request(
+            plan,
+            action,
+            {"summary": "The tunnel requires the Cloudflare daemon."},
+        )
+        self.assertEqual(request["type"], "service_activation")
+        self.assertIn("cloudflared.service", request["boss_request"])
+
+    def test_service_restart_does_not_create_new_dependency_approval(self):
+        self.assertIsNone(_dependency_key({
+            "op": "service",
+            "service": "nginx.service",
+            "action": "restart",
+        }))
+
+    def test_manager_cannot_auto_approve_package_install(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Configure tunnel",
+            "milestones": ["Configure"],
+            "verification": ["Works"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(allowed_packages=[]),
+        }, "pi")
+        review = _manager_scope_review(
+            SimpleNamespace(),
+            plan,
+            "Configure",
+            {"op": "package_install", "packages": ["cloudflared"]},
+            "package is not approved",
+            "cloudflared command not found",
+            "balanced",
+        )
+        self.assertFalse(review["approve"])
+        self.assertTrue(review["escalate"])
+        self.assertIn("owner approval", review["reason"])
