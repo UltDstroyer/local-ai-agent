@@ -498,6 +498,11 @@ class Coordinator:
             if key not in available:
                 available.append(key)
             context["available_inputs"] = available[-20:]
+            expired = [
+                item for item in context.get("expired_inputs", [])
+                if item != key
+            ]
+            context["expired_inputs"] = expired[-20:]
             input_requests = dict(context.get("input_requests", {}))
             input_requests[key] = {
                 "prompt": str(expected.get("prompt", "Enter value"))[:300],
