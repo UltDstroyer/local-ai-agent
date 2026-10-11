@@ -241,6 +241,15 @@ def _print_manager_report(value):
     if report.get("summary"):
         print("  summary:", report["summary"])
 
+    progress = value.get("progress") or {}
+    if isinstance(progress.get("percent_complete"), int):
+        stage = progress.get("current_stage_name") or progress.get("phase", "")
+        print(
+            "  current progress:",
+            f"{progress['percent_complete']}%"
+            + (f" — {stage}" if stage else ""),
+        )
+
     done = report.get("done") or []
     if done:
         print("  done:")
@@ -473,7 +482,8 @@ def _wait_for_recovery_successor(path, *, remote, scope, failed_plan_id):
             if item.get("id") != failed_plan_id
             and item.get("status") == "awaiting_approval"
             and (
-                str((item.get("context") or {}).get("recovery_of_plan_id", ""))
+                str(item.get("recovery_of_plan_id", "")) == failed_plan_id
+                or str((item.get("context") or {}).get("recovery_of_plan_id", ""))
                 == failed_plan_id
                 or f"Failed plan ID: {failed_plan_id}" in str(item.get("goal", ""))
             )
@@ -499,6 +509,30 @@ def _wait_for_recovery_successor(path, *, remote, scope, failed_plan_id):
                 file=sys.stderr,
                 flush=True,
             )
+            delta = (
+                successor.get("recovery_delta")
+                or (successor.get("context") or {}).get("recovery_delta")
+                or {}
+            )
+            if isinstance(delta, dict) and delta:
+                print("  why the old plan was replaced:", file=sys.stderr)
+                if delta.get("why_replaced"):
+                    print("    ", str(delta["why_replaced"])[:1200], file=sys.stderr)
+                kept = delta.get("preserved_completed_work") or []
+                if kept:
+                    print("  preserved from the old plan:", file=sys.stderr)
+                    for item in kept[:6]:
+                        print("    [kept]", item, file=sys.stderr)
+                old_strategy = delta.get("old_remaining_strategy") or []
+                if old_strategy:
+                    print("  old remaining strategy:", file=sys.stderr)
+                    for item in old_strategy[:6]:
+                        print("    [replaced]", item, file=sys.stderr)
+                new_strategy = delta.get("new_strategy") or []
+                if new_strategy:
+                    print("  new strategy:", file=sys.stderr)
+                    for item in new_strategy[:8]:
+                        print("    [new]", item, file=sys.stderr)
             _print_plan_summary({"plan": successor})
             print(
                 "  reply: ctx a a  (approve)  |  ctx a x  (reject)",
