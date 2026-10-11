@@ -495,59 +495,13 @@ minimum required action anyway so ctx-agent can turn it into an owner-visible
 deviation request."""
 
 
-def _admin_action_review(
-    settings, plan: RemotePlan, milestone: str, actions: list[dict],
-    inspection: str, mode: str,
-) -> dict:
-    prompt = f"""You are the local remote-change administrator supervising Codex.
-Review the proposed typed SSH actions before execution.
-
-Goal: {plan.goal}
-Milestone: {milestone}
-Approved budget: {json.dumps(plan.budget.to_dict())}
-Actions: {json.dumps(actions)[:18000]}
-Inspection: {inspection[:14000]}
-
-Return JSON only:
-{{
-  "approve": true,
-  "guidance": "short correction if not approved",
-  "reason": "why"
-}}
-
-Approve only actions that are necessary, on-task, and minimal. Do not grant
-new authority. Scope enforcement happens separately."""
-    try:
-        response = ask(
-            settings,
-            [
-                {"role": "system", "content": "Return strict JSON only."},
-                {"role": "user", "content": prompt},
-            ],
-            "balanced" if mode == "quiet" else mode,
-            tools=[],
-            json_mode=True,
-        )
-        value = _json_object(str(response.get("content", "")))
-        return {
-            "approve": value.get("approve") is True,
-            "guidance": str(value.get("guidance", ""))[:3000],
-            "reason": str(value.get("reason", ""))[:3000],
-        }
-    except Exception:
-        return {
-            "approve": False,
-            "guidance": "Re-propose a smaller set of necessary typed actions.",
-            "reason": "administrator review was inconclusive",
-        }
-
-
 def _completion_review(
     settings, plan: RemotePlan, milestone: str, results: list[dict],
     inspection: str, mode: str,
 ) -> dict:
-    prompt = f"""You are the local administrator. Decide whether the remote milestone is
-complete after the broker executed the approved typed actions.
+    prompt = f"""You are the local manager reviewing a completed Codex work cycle.
+Do not re-litigate individual in-contract actions. Decide whether the milestone
+is complete, should continue, or is blocked based on results and fresh state.
 
 Goal: {plan.goal}
 Milestone: {milestone}
@@ -871,37 +825,14 @@ def run_remote_plan_step(settings, remote_store, row: dict, mode: str):
         )
         return
 
-    admin = _admin_action_review(
-        settings,
-        plan,
-        plan.milestones[index],
-        validated,
-        inspection.get("output", ""),
-        mode,
+    # The owner-approved remote contract plus deterministic validation is the
+    # execution gate. The local model manages plan scope and milestone outcomes,
+    # but does not second-guess every in-contract Codex action batch.
+    remote_store.event(
+        plan.id,
+        "remote_actions_validated",
+        f"{len(validated)} in-contract action(s) for milestone {index + 1}",
     )
-    if not admin["approve"]:
-        attempts = int(row["attempts"]) + 1
-        context["next_guidance"] = admin["guidance"]
-        if attempts >= plan.budget.max_attempts_per_milestone:
-            remote_store.create_deviation(
-                plan.id,
-                plan.target,
-                "Codex and administrator could not agree on safe remote actions",
-                {
-                    "type": "stalled",
-                    "milestone": plan.milestones[index],
-                    "reason": admin["reason"],
-                    "suggested_action": admin["guidance"],
-                },
-            )
-        else:
-            remote_store.update_plan(
-                plan.id,
-                status="approved",
-                attempts=attempts,
-                context=context,
-            )
-        return
 
     results = []
     mutations = list(row.get("mutations", []))
