@@ -749,7 +749,7 @@ class RemoteDependencyApprovalTests(unittest.TestCase):
                 "service": "nginx.service",
                 "action": "restart",
             }),
-            "service:nginx",
+            "service:nginx:runtime",
         )
 
     def test_manager_cannot_auto_approve_package_install(self):
