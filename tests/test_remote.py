@@ -480,12 +480,9 @@ class SSHBridgeTests(unittest.TestCase):
         self.assertEqual(runner.call_args.kwargs["timeout"], 60)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
-
-
+class RemoteExecDependencyBoundaryTests(unittest.TestCase):
     def test_remote_exec_cannot_bypass_dependency_approval(self):
         b = RemoteBudget.from_dict(budget(
             allow_remote_admin=True,
@@ -894,3 +891,7 @@ class RemoteWorkerEscalationBoundaryTests(unittest.TestCase):
             source,
         )
         self.assertIn("remote_internal_format_recovery", source)
+
+
+if __name__ == "__main__":
+    unittest.main()
