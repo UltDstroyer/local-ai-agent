@@ -199,6 +199,38 @@ class Coordinator:
         )
         return value
 
+    def _active_plan_rows(self):
+        statuses = {
+            "awaiting_approval",
+            "approved",
+            "running",
+            "awaiting_deviation",
+            "ready_for_review",
+        }
+        rows = [
+            ("project", row)
+            for row in self.store.list_plans(limit=50)
+            if row.get("status") in statuses
+        ]
+        rows.extend(
+            ("remote", row)
+            for row in self.remote_store.list_plans(limit=50)
+            if row.get("status") in statuses
+        )
+        return rows
+
+    def _require_idle_for_new_plan(self):
+        active = self._active_plan_rows()
+        if active:
+            kind, row = active[0]
+            scope = row.get("project") if kind == "project" else row.get("target")
+            raise ValueError(
+                "another plan is already active"
+                + (f" ({scope})" if scope else "")
+                + "; finish or cancel it before creating a new plan"
+            )
+
+
     def dispatch(self, data: dict):
         op = data.get("op")
         if op == "health":
@@ -288,6 +320,7 @@ class Coordinator:
 
         # -------- negotiated SSH remote plans --------
         if op == "remote_plan_create":
+            self._require_idle_for_new_plan()
             target_name = data.get("target", "")
             goal = data.get("goal", "")
             target_raw = self.remote_store.get_target(target_name)
@@ -472,6 +505,7 @@ class Coordinator:
 
         # -------- negotiated Codex project plans --------
         if op == "plan_create":
+            self._require_idle_for_new_plan()
             project = data.get("project", "")
             goal = data.get("goal", "")
             source = self.project(project)
