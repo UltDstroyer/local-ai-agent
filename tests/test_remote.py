@@ -12,7 +12,7 @@ from ctx_agent.remote import (
     RemoteTarget,
     validate_remote_action,
 )
-from ctx_agent.remote_orchestrator import _remote_context_dir
+from ctx_agent.remote_orchestrator import _json_object, _remote_context_dir
 from ctx_agent.remote_store import RemoteStore
 from ctx_agent.ssh_bridge import SSHBridge, SSHBridgeError, _ssh_base
 
@@ -102,6 +102,19 @@ class RemoteContractTests(unittest.TestCase):
         plan = RemotePlan.from_dict(raw, "pi")
         self.assertEqual(plan.target, "pi")
         self.assertTrue(plan.budget.backup_required)
+
+
+class RemoteJSONTests(unittest.TestCase):
+    def test_json_object_accepts_markdown_fence(self):
+        self.assertEqual(
+            _json_object('```json\n{"agreement": true}\n```'),
+            {"agreement": True},
+        )
+
+    def test_json_object_wraps_decode_error_as_contract_error(self):
+        with self.assertRaises(RemoteContractError):
+            _json_object('{"goal": "media",}')
+
 
 
 class RemoteWorkspaceTests(unittest.TestCase):
