@@ -491,13 +491,16 @@ Return JSON only:
 }}
 
 Use only the actions actually needed for this milestone. Prefer typed actions
-when they are sufficient. If allow_remote_admin is true, remote_exec may be
-used for arbitrary maintenance on the SSH target, including package removal,
-filesystem cleanup, repository management, migrations, and other work not
-expressible by typed actions. Set as_root=true only when root is needed. The
-remote command runs on the SSH target, not on the desktop. Never include secret
-tokens or passwords. If the approved contract is insufficient, propose the
-minimum required action anyway so ctx-agent can turn it into an owner-visible
+when they are sufficient. Package installation/removal, service start/restart/
+enable/disable, and obvious system dependency downloads MUST use typed actions
+so the owner dependency/service approval gate cannot be bypassed. Do not put
+those operations inside remote_exec. If allow_remote_admin is true, remote_exec
+may be used for other arbitrary maintenance on the SSH target, including
+filesystem cleanup, repository inspection, migrations, and work not expressible
+by typed actions. Set as_root=true only when root is needed. The remote command
+runs on the SSH target, not on the desktop. Never include secret tokens or
+passwords. If the approved contract is insufficient, propose the minimum
+required typed action anyway so ctx-agent can turn it into an owner-visible
 deviation request."""
 
 
@@ -1059,6 +1062,9 @@ def _is_remote_action_format_error(reason: str) -> bool:
         or lower.startswith("remote action must be an object")
         or lower.startswith("invalid command existence check")
         or lower.startswith("unsupported remote service action format")
+        or lower.startswith(
+            "remote_exec dependency/service mutation must use a typed action"
+        )
     )
 
 
