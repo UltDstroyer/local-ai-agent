@@ -1,6 +1,7 @@
 import unittest
 
 from ctx_agent.governance import (
+    owner_decision_key,
     owner_request_is_internal,
     valid_local_owner_request,
     valid_remote_owner_request,
@@ -121,3 +122,41 @@ class BossViewTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RejectionIdentityTests(unittest.TestCase):
+    def test_human_input_identity_uses_key_not_wording(self):
+        first = owner_decision_key({
+            "type": "human_input",
+            "boss_request": "Allow me to ask for the Cloudflare token.",
+            "input_request": {
+                "key": "cloudflare_token",
+                "prompt": "Cloudflare token",
+                "reason": "Needed for authentication.",
+                "sensitive": True,
+            },
+        })
+        paraphrase = owner_decision_key({
+            "type": "human_input_refresh",
+            "boss_request": "May I ask you to re-enter that credential?",
+            "input_request": {
+                "key": "cloudflare_token",
+                "prompt": "Token again",
+                "reason": "The coordinator restarted.",
+                "sensitive": True,
+            },
+        })
+        self.assertEqual(first, "input:cloudflare_token")
+        self.assertEqual(first, paraphrase)
+
+    def test_generic_decision_identity_is_stable_under_whitespace_and_case(self):
+        first = owner_decision_key({
+            "type": "manager_escalation",
+            "boss_request": "Allow changing the public hostname.",
+        })
+        second = owner_decision_key({
+            "type": "manager_escalation",
+            "boss_request": "  ALLOW   changing the public hostname. ",
+        })
+        self.assertEqual(first, second)
+        self.assertTrue(first.startswith("decision:"))
