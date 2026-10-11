@@ -12,10 +12,14 @@ class AdapterTests(unittest.TestCase):
                                      "CTX_EXTENSION_API_VERSION": version}):
             with patch("ctx_agent.context_extension.agent_cli.main",
                        return_value=0) as agent:
-                with patch("ctx_agent.context_extension.media.main",
-                           return_value=0) as media:
-                    result = main(argv)
-                    return result, agent, media
+                with patch(
+                    "ctx_agent.context_extension._pending_for_project",
+                    return_value=None,
+                ):
+                    with patch("ctx_agent.context_extension.media.main",
+                               return_value=0) as media:
+                        result = main(argv)
+                        return result, agent, media
 
     def test_context_defaults_to_active_project(self):
         result, cli, _ = self.invoke(["submit", "Fix the tests"])
@@ -237,6 +241,24 @@ class AdapterTests(unittest.TestCase):
         result, cli, _ = self.invoke(["arbitrary-host-shell"])
         self.assertEqual(result, 2)
         cli.assert_not_called()
+
+
+    def test_active_context_approval_prefers_pending_deviation(self):
+        with patch.dict(os.environ, {
+            "CTX_CONTEXT": "research",
+            "CTX_EXTENSION_API_VERSION": "1",
+        }):
+            with patch(
+                "ctx_agent.context_extension._pending_for_project",
+                return_value={"id": "abc123def456", "project": "research", "status": "pending"},
+            ):
+                with patch(
+                    "ctx_agent.context_extension.agent_cli.main",
+                    return_value=0,
+                ) as agent:
+                    result = main(["approve"])
+        self.assertEqual(result, 0)
+        agent.assert_called_once_with(["deviation-approve", "abc123def456"])
 
 
 if __name__ == "__main__":
