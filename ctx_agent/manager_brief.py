@@ -35,6 +35,26 @@ def _fallback_brief(deviation: dict) -> dict:
     proposed = request.get("proposed_action") or request.get("action") or {}
     boss_value = request.get("boss_request", "")
     request_text = boss_value.strip() if isinstance(boss_value, str) else ""
+    if not request_text:
+        mutation = request.get("mutation_budget")
+        add_scope = request.get("add_write_scope") or []
+        if isinstance(mutation, dict):
+            if mutation.get("allow_dependency_changes"):
+                request_text = "Allow the requested project dependency changes."
+            elif mutation.get("allow_config_changes"):
+                request_text = "Allow the requested project configuration changes."
+            elif mutation.get("allow_file_deletion"):
+                request_text = "Allow the requested file deletions."
+            elif mutation.get("allow_new_files"):
+                request_text = "Allow the requested new files."
+            elif isinstance(add_scope, list) and add_scope:
+                request_text = (
+                    "Allow writes to: "
+                    + ", ".join(str(x) for x in add_scope[:6])
+                    + "."
+                )
+            else:
+                request_text = "Allow the requested project mutation-budget expansion."
     if not request_text and isinstance(proposed, dict) and proposed:
         op = str(proposed.get("op", "change"))
         if op == "check":
