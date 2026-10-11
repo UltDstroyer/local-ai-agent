@@ -106,6 +106,9 @@ class BossViewTests(unittest.TestCase):
     def test_public_deviation_list_drops_request_payload(self):
         public = Coordinator._public_deviations([{
             "id": "abc123def456",
+            "plan": "plan123",
+            "project": "",
+            "target": "pi",
             "status": "pending",
             "created": 1.0,
             "updated": 2.0,
@@ -114,10 +117,15 @@ class BossViewTests(unittest.TestCase):
         }])
         self.assertEqual(public, [{
             "id": "abc123def456",
+            "plan": "plan123",
+            "project": "",
+            "target": "pi",
             "status": "pending",
             "created": 1.0,
             "updated": 2.0,
         }])
+        self.assertNotIn("reason", public[0])
+        self.assertNotIn("request", public[0])
 
 
     def test_rephrased_same_remote_action_has_same_decision_identity(self):
