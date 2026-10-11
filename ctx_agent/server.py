@@ -208,7 +208,8 @@ class Coordinator:
             active = [
                 p for p in self.store.list_plans(limit=20)
                 if p["status"] in (
-                    "approved", "running", "awaiting_deviation", "ready_for_review"
+                    "awaiting_approval", "approved", "running",
+                    "awaiting_deviation", "ready_for_review"
                 )
             ]
             remote_active = [
