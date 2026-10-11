@@ -517,24 +517,12 @@ Return JSON only:
   "reason": "why",
   "owner_needed": false,
   "owner_request": "",
-  "risk": "low|medium|high",
-  "input_request": null
+  "risk": "low|medium|high"
 }}
 
-Set owner_needed=true only when you genuinely need a new boss decision,
-permission, credential, secret, or other human-only fact. Technical debugging
-and choosing a new implementation approach are your job with Codex.
-
-If human-only input is required, set input_request to exactly one object:
-{{
-  "key": "short_safe_name",
-  "prompt": "what you need the boss to enter",
-  "reason": "why this exact value is necessary now",
-  "sensitive": true
-}}
-Ask for only one value at a time. Do not request multiple credentials together.
-Do not ask for a secret unless the current milestone cannot proceed without it.
-The owner sees this request only after approving the related deviation.
+Set owner_needed=true only when you genuinely need a new boss decision or
+permission. Technical debugging and choosing a new implementation approach are
+your job with Codex.
 
 If the current approach is failing repeatedly, use the full inspection, results,
 verification criteria, and prior context to choose a materially different
@@ -557,34 +545,6 @@ strategy before escalating to the owner."""
         value["owner_request"] = str(value.get("owner_request", "")).strip()[:500]
         risk = str(value.get("risk", "medium")).lower()
         value["risk"] = risk if risk in ("low", "medium", "high") else "medium"
-        input_request = value.get("input_request")
-        if input_request is not None:
-            if not isinstance(input_request, dict):
-                raise ValueError("input_request must be null or an object")
-            key = str(input_request.get("key", "")).strip()
-            prompt_text = str(input_request.get("prompt", "")).strip()
-            reason_text = str(input_request.get("reason", "")).strip()
-            sensitive = input_request.get("sensitive", False)
-            if (
-                not key
-                or len(key) > 64
-                or not key.replace("_", "").replace("-", "").isalnum()
-                or not prompt_text
-                or not reason_text
-                or type(sensitive) is not bool
-            ):
-                raise ValueError("invalid input_request")
-            value["input_request"] = {
-                "key": key,
-                "prompt": prompt_text[:300],
-                "reason": reason_text[:600],
-                "sensitive": sensitive,
-            }
-            value["owner_needed"] = True
-            if not value["owner_request"]:
-                value["owner_request"] = (
-                    "Allow Qwen to request one human-only input needed for this step."
-                )
         if value["owner_needed"] and not value["owner_request"]:
             raise ValueError("owner_needed requires one concrete owner_request")
         return value
@@ -597,7 +557,6 @@ strategy before escalating to the owner."""
             "owner_needed": False,
             "owner_request": "",
             "risk": "medium",
-            "input_request": None,
         }
 
 
@@ -638,12 +597,8 @@ Return JSON only:
   "why_different": "how this avoids the previous failure",
   "owner_needed": false,
   "owner_request": "",
-  "risk": "low|medium|high",
-  "input_request": null
-}}
-
-If input_request is needed, request exactly one value with key, prompt, reason,
-and sensitive. Never request several human inputs together."""
+  "risk": "low|medium|high"
+}}"""
     return _ask_json_object(
         settings,
         [
@@ -1294,7 +1249,6 @@ def run_remote_plan_step(
                         "reason": str(replan.get("why_different", ""))[:2000],
                         "boss_request": str(replan.get("owner_request", ""))[:500],
                         "risk": str(replan.get("risk", "medium"))[:16],
-                        "input_request": replan.get("input_request"),
                         "suggested_action": context["next_guidance"],
                     },
                 )
@@ -1378,7 +1332,6 @@ def run_remote_plan_step(
                 "reason": review.get("reason", ""),
                 "boss_request": review.get("owner_request", ""),
                 "risk": review.get("risk", "medium"),
-                "input_request": review.get("input_request"),
                 "suggested_action": review.get("guidance", ""),
             },
         )
