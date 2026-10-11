@@ -16,6 +16,7 @@ from .contracts import ContractError, Plan, analyze_changes, contract_violations
 from .orchestrator import (
     OrchestrationError,
     approve_deviation,
+    classify_project_error,
     create_negotiated_plan,
     ensure_workspace,
     reject_deviation,
@@ -731,19 +732,12 @@ class Coordinator:
                 except Exception as exc:
                     current = self.store.get_plan(row["id"])
                     if current and current["status"] == "running":
-                        request = {
-                            "type": "system_error",
-                            "error": str(exc)[:4000],
-                            "suggested_action": (
-                                "Check Codex bridge/authentication or service logs, "
-                                "then approve to retry."
-                            ),
-                        }
+                        failure = classify_project_error(exc)
                         self.store.create_deviation(
                             row["id"],
                             row["project"],
-                            "Autonomous step stopped by a system/tool error",
-                            request,
+                            "Autonomous step stopped: " + failure["type"],
+                            failure,
                         )
             except Exception:
                 self.shutdown.wait(1)
