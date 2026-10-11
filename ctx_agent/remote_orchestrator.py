@@ -629,6 +629,19 @@ def _human_input_error(input_request: object) -> str | None:
         return "invalid input_request"
 
     combined = (key + " " + prompt_text + " " + reason_text).lower()
+    multi_value_prompt = re.search(
+        r"\b(username|email|password|passphrase|token|api[ _-]?key|"
+        r"client[ _-]?id|client[ _-]?secret|verification[ _-]?code|otp)\b"
+        r"\s*(?:,|and|&|/)\s*"
+        r"(?:your\s+)?\b(username|email|password|passphrase|token|api[ _-]?key|"
+        r"client[ _-]?id|client[ _-]?secret|verification[ _-]?code|otp)\b",
+        prompt_text.lower(),
+    )
+    if multi_value_prompt:
+        return (
+            "input_request asks for multiple human values; request exactly one "
+            "value at a time"
+        )
     observable_markers = (
         " status",
         "_status",
