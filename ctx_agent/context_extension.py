@@ -39,6 +39,7 @@ Codex project workflow:
   ctx agent plan [--project NAME] "GOAL"
   ctx agent plan [--project NAME] show|diff|apply|cancel [PLAN_ID]
   ctx agent plan list [--project NAME]
+  ctx agent progress [--project NAME | --target NAME] [PLAN_ID]
   ctx agent approve [--project NAME] [PLAN_ID]
   ctx agent reject [--project NAME] [PLAN_ID]
   ctx agent deviations [--project NAME]
@@ -126,6 +127,45 @@ def _plan(rest: list[str]) -> int:
     if len(args) != 1 or not args[0]:
         return fail('usage: ctx agent plan [--project NAME] "GOAL"')
     return agent_cli.main(["plan-create", project, args[0]])
+
+
+def _progress(rest: list[str]) -> int:
+    if rest[:1] == ["--target"]:
+        if len(rest) not in (2, 3):
+            return fail(
+                "usage: ctx agent progress --target NAME [PLAN_ID]"
+            )
+        target = rest[1]
+        if not valid_name(target):
+            return fail("invalid SSH target name")
+        return agent_cli.main([
+            "remote-plan-progress", target, *rest[2:]
+        ])
+
+    if rest[:1] == ["--project"]:
+        if len(rest) not in (2, 3):
+            return fail(
+                "usage: ctx agent progress --project NAME [PLAN_ID]"
+            )
+        project = rest[1]
+        if not valid_name(project):
+            return fail("invalid project name")
+        return agent_cli.main([
+            "plan-progress", project, *rest[2:]
+        ])
+
+    if len(rest) > 1:
+        return fail(
+            "usage: ctx agent progress [--project NAME | --target NAME] [PLAN_ID]"
+        )
+    project = os.environ.get("CTX_CONTEXT", "")
+    if not project:
+        return fail(
+            "no active ctx context; provide --project NAME or --target NAME"
+        )
+    if not valid_name(project):
+        return fail("invalid agent project name")
+    return agent_cli.main(["plan-progress", project, *rest])
 
 
 def _approval(action: str, rest: list[str]) -> int:
@@ -218,6 +258,8 @@ def main(argv=None) -> int:
             return _plan(rest)
         if action == "target":
             return _target(rest)
+        if action == "progress":
+            return _progress(rest)
         if action in ("approve", "reject"):
             return _approval(action, rest)
         if action == "deviations":
