@@ -144,6 +144,13 @@ class Coordinator:
             snapshot["planned_stages"] = list(state.get("planned_stages", []))
         return planning_snapshot(snapshot)
 
+    def _planning_active_count(self) -> int:
+        with self.lock:
+            return sum(
+                1 for state in self.planning_progress.values()
+                if state.get("active")
+            )
+
     def _plan(self, project: str, pid: str = ""):
         if pid:
             row = self.store.get_plan(pid)
@@ -217,10 +224,7 @@ class Coordinator:
                 "remote_targets": len(self.remote_store.list_targets()),
                 "ssh_bridge_configured": self.settings.ssh_bridge_socket is not None,
                 "autonomous_execution": self.mode == "maximum",
-                "planning_tasks": sum(
-                    1 for state in self.planning_progress.values()
-                    if state.get("active")
-                ),
+                "planning_tasks": self._planning_active_count(),
             }
         if op == "mode":
             mode = data.get("mode")
@@ -362,18 +366,30 @@ class Coordinator:
                     raise ValueError(
                         "Remote plan is not awaiting initial approval"
                     )
-                return {"plan": self.remote_store.get_plan(row["id"])}
+                return {
+                    "plan": self._remote_plan_view(
+                        self.remote_store.get_plan(row["id"])
+                    )
+                }
             if op == "remote_plan_reject":
                 if not self.remote_store.reject_plan(row["id"]):
                     raise ValueError(
                         "Remote plan is not awaiting initial approval"
                     )
-                return {"plan": self.remote_store.get_plan(row["id"])}
+                return {
+                    "plan": self._remote_plan_view(
+                        self.remote_store.get_plan(row["id"])
+                    )
+                }
             if not self.remote_store.cancel_plan(row["id"]):
                 raise ValueError(
                     "Remote plan cannot be cancelled in its current state"
                 )
-            return {"plan": self.remote_store.get_plan(row["id"])}
+            return {
+                "plan": self._remote_plan_view(
+                    self.remote_store.get_plan(row["id"])
+                )
+            }
 
         if op == "remote_deviation_list":
             return {
