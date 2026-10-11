@@ -24,7 +24,12 @@ from ctx_agent.remote_orchestrator import (
     classify_remote_error,
 )
 from ctx_agent.remote_store import RemoteStore
-from ctx_agent.ssh_bridge import SSHBridge, SSHBridgeError, _ssh_base
+from ctx_agent.ssh_bridge import (
+    SSHBridge,
+    SSHBridgeError,
+    _resolve_action_inputs,
+    _ssh_base,
+)
 
 
 def budget(**overrides):
@@ -487,3 +492,68 @@ class RemoteInvalidProposalRecoveryTests(unittest.TestCase):
             .joinpath("ctx_agent", "remote_orchestrator.py")
             .read_text(),
         )
+
+
+class EphemeralHumanInputTests(unittest.TestCase):
+    def test_placeholder_resolves_only_inside_ssh_bridge(self):
+        action = {
+            "op": "remote_exec",
+            "command": "tool --token {{input:cloudflare_token}}",
+            "as_root": False,
+            "timeout": 60,
+        }
+        resolved = _resolve_action_inputs(
+            action, {"cloudflare_token": "secret-value"}
+        )
+        self.assertEqual(
+            resolved["command"],
+            "tool --token secret-value",
+        )
+        self.assertIn("{{input:cloudflare_token}}", action["command"])
+        self.assertNotIn("secret-value", action["command"])
+
+    def test_missing_ephemeral_input_fails_closed(self):
+        action = {
+            "op": "remote_exec",
+            "command": "tool --token {{input:cloudflare_token}}",
+            "as_root": False,
+            "timeout": 60,
+        }
+        with self.assertRaisesRegex(SSHBridgeError, "human input is unavailable"):
+            _resolve_action_inputs(action, {})
+
+    def test_completion_review_accepts_one_input_request(self):
+        settings = SimpleNamespace()
+        response = {
+            "content": (
+                '{"state":"blocked","guidance":"continue after input",'
+                '"context_note":"","reason":"authentication required",'
+                '"owner_needed":true,'
+                '"owner_request":"Allow me to request one credential.",'
+                '"risk":"medium",'
+                '"input_request":{'
+                '"key":"cloudflare_token",'
+                '"prompt":"Cloudflare token",'
+                '"reason":"Needed to authenticate the existing tunnel.",'
+                '"sensitive":true}}'
+            )
+        }
+        with patch("ctx_agent.remote_orchestrator.ask", return_value=response):
+            value = _completion_review(
+                settings,
+                RemotePlan.from_dict({
+                    "goal": "Configure tunnel",
+                    "milestones": ["Authenticate"],
+                    "verification": ["Tunnel works"],
+                    "risks": [],
+                    "assumptions": [],
+                    "remote_budget": budget(),
+                }, "pi"),
+                "Authenticate",
+                [{"ok": False}],
+                "authentication required",
+                "balanced",
+            )
+        self.assertTrue(value["owner_needed"])
+        self.assertEqual(value["input_request"]["key"], "cloudflare_token")
+        self.assertTrue(value["input_request"]["sensitive"])
