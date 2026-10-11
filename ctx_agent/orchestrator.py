@@ -222,6 +222,7 @@ def create_negotiated_plan(
         ],
         "balanced" if mode == "quiet" else mode,
         tools=[],
+        json_mode=True,
     )
     admin = _json_object(str(admin_message.get("content", "")))
     plan = Plan.from_dict(admin, project)
