@@ -234,7 +234,44 @@ class Store:
             raise ValueError("no such plan")
         current_status = state_row["status"]
         requested_status = fields.get("status")
-        terminal = {"completed", "cancelled", "rejected"}
+        # Only the dedicated owner cancel transition may produce "cancelled".
+        # Internal code historically used cancelled as a generic recovery sink,
+        # which made technical failures indistinguishable from an owner action.
+        if requested_status == "cancelled":
+            with self.lock:
+                context_row = self.db.execute(
+                    "SELECT context_json FROM plans WHERE id=?", (pid,)
+                ).fetchone()
+            context = dict(fields.get("context") or (
+                json.loads(context_row["context_json"]) if context_row else {}
+            ))
+            cycles = int(context.get("hard_replan_cycles", 0)) + 1
+            context["hard_replan_cycles"] = cycles
+            prior = str(fields.get("result", "")).strip()
+            context["last_internal_failure"] = prior[:2400]
+            if cycles <= 2:
+                context["next_guidance"] = (
+                    "Qwen manager hard recovery: start a genuinely fresh technical "
+                    "replan from the current observed state. Re-inspect first, open "
+                    "a fresh Codex thread, and do not repeat the failed strategy. "
+                    + (("Previous failure: " + prior) if prior else "")
+                )[:3500]
+                fields["status"] = "approved"
+                fields["attempts"] = 0
+                fields["codex_thread"] = ""
+                fields["context"] = context
+                fields["result"] = ""
+            else:
+                context["next_guidance"] = ""
+                fields["status"] = "failed_internal"
+                fields["context"] = context
+                if not prior:
+                    fields["result"] = (
+                        "Qwen and Codex exhausted bounded fresh replans without "
+                        "identifying an owner decision."
+                    )
+            requested_status = fields.get("status")
+        terminal = {"completed", "cancelled", "rejected", "failed_internal"}
         if current_status in terminal:
             if requested_status is not None and requested_status != current_status:
                 raise ValueError("terminal plan state cannot be resurrected")
@@ -263,7 +300,7 @@ class Store:
             )
             if cur.rowcount != 1:
                 raise ValueError("no such plan")
-            if fields.get("status") in ("completed", "cancelled", "rejected"):
+            if fields.get("status") in ("completed", "cancelled", "rejected", "failed_internal"):
                 self.db.execute(
                     "UPDATE deviations SET status='superseded',updated=? "
                     "WHERE plan=? AND status='pending'",
