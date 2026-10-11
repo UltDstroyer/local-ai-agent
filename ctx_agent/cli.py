@@ -267,6 +267,8 @@ def _print_live_deviation(deviation, brief):
     print("  summary:", brief.get("summary", ""), file=sys.stderr)
     if brief.get("request"):
         print("  request:", brief.get("request", ""), file=sys.stderr)
+    if brief.get("severity"):
+        print("  severity:", brief.get("severity"), file=sys.stderr)
     print("  risk:", brief.get("risk", "medium"), file=sys.stderr)
     print("  recommendation:", brief.get("recommendation", ""), file=sys.stderr)
     print("  decision:", brief.get("decision", ""), file=sys.stderr)
