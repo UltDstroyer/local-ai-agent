@@ -3420,7 +3420,14 @@ def reject_remote_deviation(settings, remote_store, did: str) -> dict:
     request = deviation.get("request") or {}
     if request.get("type") in ("dependency_install", "service_activation"):
         rejected = list(context.get("rejected_dependencies", []))
-        dependency_key = str(request.get("dependency_key", "")).strip()
+        proposed_action = request.get("proposed_action")
+        derived_dependency_key = (
+            _dependency_key(proposed_action)
+            if isinstance(proposed_action, dict)
+            else None
+        )
+        stored_dependency_key = str(request.get("dependency_key", "")).strip()
+        dependency_key = stored_dependency_key or derived_dependency_key or ""
         if dependency_key and dependency_key not in rejected:
             rejected.append(dependency_key)
         context["rejected_dependencies"] = rejected[-50:]
