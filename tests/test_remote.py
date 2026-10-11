@@ -16,6 +16,7 @@ from ctx_agent.remote_orchestrator import (
     _ask_json_object,
     _json_object,
     _completion_review,
+    _codex_manager_checkin_remote,
     _dependency_key,
     _dependency_owner_request,
     _human_input_error,
@@ -654,3 +655,57 @@ class RemoteDependencyApprovalTests(unittest.TestCase):
         self.assertFalse(review["approve"])
         self.assertTrue(review["escalate"])
         self.assertIn("owner approval", review["reason"])
+
+
+class CodexManagerCollaborationTests(unittest.TestCase):
+    def test_codex_can_override_manager_with_better_strategy(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Configure Cloudflare Tunnel",
+            "milestones": ["Make tunnel available"],
+            "verification": ["Tunnel works"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(),
+        }, "pi")
+        row = {
+            "current_milestone": 0,
+            "context": {"history": []},
+        }
+        response = {
+            "ok": True,
+            "message": json.dumps({
+                "agreement": False,
+                "better_strategy": "Install cloudflared first, then configure the tunnel.",
+                "guidance_to_manager": "Ask for installation approval before continuing.",
+                "owner_needed": True,
+                "owner_request": "Allow installation of cloudflared.",
+                "risk": "medium",
+            }),
+        }
+        with patch(
+            "ctx_agent.remote_orchestrator.bridge_call",
+            return_value=response,
+        ):
+            value = _codex_manager_checkin_remote(
+                SimpleNamespace(codex_bridge_socket=Path("/tmp/fake")),
+                plan,
+                row,
+                Path("/tmp"),
+                "thread",
+                "cloudflared not found",
+                [],
+                {
+                    "state": "blocked",
+                    "guidance": "inspect again",
+                    "reason": "tunnel unavailable",
+                    "owner_needed": False,
+                },
+                "balanced",
+            )
+        self.assertFalse(value["agreement"])
+        self.assertIn("Install cloudflared", value["better_strategy"])
+        self.assertTrue(value["owner_needed"])
+        self.assertEqual(
+            value["owner_request"],
+            "Allow installation of cloudflared.",
+        )
