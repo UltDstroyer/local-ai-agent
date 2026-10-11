@@ -140,14 +140,20 @@ class Coordinator:
                 "and escalate only a concrete authority, dependency, credential, "
                 "or human-choice decision."
             )
-            self.remote_store.update_plan(
-                row["id"], status="approved", attempts=0, context=context
-            )
-            self.remote_store.event(
-                row["id"],
-                "remote_internal_deviation_auto_retired",
-                deviation["id"],
-            )
+            if self.remote_store.resume_from_deviation(
+                row["id"], attempts=0, context=context
+            ):
+                self.remote_store.event(
+                    row["id"],
+                    "remote_internal_deviation_auto_retired",
+                    deviation["id"],
+                )
+            else:
+                self.remote_store.event(
+                    row["id"],
+                    "remote_internal_deviation_retired_without_resume",
+                    deviation["id"] + ": plan changed concurrently",
+                )
 
     def _retire_invalid_local_deviations(self):
         for row in self.store.list_plans(limit=100):
@@ -183,14 +189,20 @@ class Coordinator:
                 "reached the boss. Re-evaluate with Codex and escalate only a "
                 "real owner authority or preference decision."
             )
-            self.store.update_plan(
-                row["id"], status="approved", attempts=0, context=context
-            )
-            self.store.event(
-                row["id"],
-                "project_internal_deviation_auto_retired",
-                deviation["id"],
-            )
+            if self.store.resume_from_deviation(
+                row["id"], attempts=0, context=context
+            ):
+                self.store.event(
+                    row["id"],
+                    "project_internal_deviation_auto_retired",
+                    deviation["id"],
+                )
+            else:
+                self.store.event(
+                    row["id"],
+                    "project_internal_deviation_retired_without_resume",
+                    deviation["id"] + ": plan changed concurrently",
+                )
 
     def _planning_key(self, kind: str, scope: str):
         return (kind, scope)
