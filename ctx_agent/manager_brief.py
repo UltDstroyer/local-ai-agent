@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from .agent import ask
+from .management import deviation_severity
 
 
 def _fallback_brief(deviation: dict) -> dict:
@@ -83,6 +84,7 @@ def _fallback_brief(deviation: dict) -> dict:
         "risk": risk,
         "recommendation": recommendation,
         "decision": "Approve or reject this deviation?",
+        "severity": deviation_severity(request),
     }
 
 
@@ -172,6 +174,7 @@ or locate it, it should stay internal instead of becoming a boss request."""
             "risk": risk,
             "recommendation": str(value.get("recommendation", "")).strip()[:500],
             "decision": str(value.get("decision", "")).strip()[:500],
+            "severity": deviation_severity(deviation.get("request") or {}),
         }
     except Exception:
         # If the manager model is unavailable, show only this deviation's
