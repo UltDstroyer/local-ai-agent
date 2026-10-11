@@ -22,52 +22,138 @@ DIRECT = frozenset({
 
 HELP = """ctx-agent extension (Extension API v1)
 
-Quick jobs:
-  ctx agent health | status [JOB_ID]
-  ctx agent projects | list
-  ctx agent init [--project NAME]
+Current task:
+  ctx agent status
+  ctx agent progress
+  ctx agent approve
+  ctx agent reject
+  ctx agent deviations
+  ctx agent plan show|cancel
+  ctx agent plan "GOAL"
+
+The agent operates one active plan at a time. Current-task commands automatically
+resolve whether that plan is a local project or an SSH target, so normal use
+does not require --target, target names, plan IDs, or deviation IDs.
+
+Projects:
   ctx agent import [--project NAME] SOURCE_DIRECTORY
   ctx agent submit [--project NAME] "TASK"
   ctx agent note [--project NAME] KEY "TEXT"
   ctx agent notes [--project NAME]
+
+Agent:
   ctx agent mode quiet|balanced|maximum
-  ctx agent events|logs|show|diff|apply|cancel JOB_ID
-
-Codex project workflow:
+  ctx agent health
   ctx agent codex login|status|logout|doctor
-  ctx agent chatgpt login|status|logout
-  ctx agent plan [--project NAME] "GOAL"
-  ctx agent plan [--project NAME] show|diff|apply|cancel [PLAN_ID]
-  ctx agent plan list [--project NAME]
-  ctx agent progress [--project NAME | --target NAME] [PLAN_ID]
-  ctx agent approve [--project NAME] [PLAN_ID]
-  ctx agent reject [--project NAME] [PLAN_ID]
-  ctx agent deviations [--project NAME]
-  ctx agent deviation show|approve|reject DEVIATION_ID
 
-SSH targets and remote projects:
-  ctx agent target add NAME --ssh USER@HOST [--port PORT]
-  ctx agent target list|show|inspect|remove [NAME]
-  ctx agent plan --target NAME "GOAL"
-  ctx agent plan --target NAME show|cancel|events [PLAN_ID]
-  ctx agent approve --target NAME [PLAN_ID]
-  ctx agent reject --target NAME [PLAN_ID]
-  ctx agent deviations --target NAME
-  ctx agent remote-deviation show|approve|reject DEVIATION_ID
-
-Media:
-  ctx agent media record|enroll|narrate|mux ...
+One-time SSH setup remains available through ctx agent target add/list/show/
+inspect/remove, but target selection is not part of the normal task workflow.
 
 Plan creation is read-only. ctx-agent and Codex negotiate a mutation budget,
 then wait for owner approval. Approved plans execute autonomously only in
-maximum mode. Scope-expanding deviations pause and require owner approval.
-Codex/ChatGPT authentication stays in the desktop user's own Codex storage.
+maximum mode. When owner input is required, status/progress shows the reason
+and the single approve/reject command to use.
 """
 
 
 def fail(message: str) -> int:
     print(f"ctx-ext-agent: {message}", file=sys.stderr)
     return 2
+
+
+ACTIVE_PLAN_STATUSES = frozenset({
+    "awaiting_approval",
+    "approved",
+    "running",
+    "awaiting_deviation",
+    "ready_for_review",
+})
+
+
+def _raw(payload: dict, timeout: int = 30) -> dict:
+    socket_path = os.environ.get("CTX_AGENT_SOCKET", "/run/ctx-agent/agent.sock")
+    return agent_cli.call(socket_path, payload, timeout=timeout)
+
+
+def _all_plan_rows() -> list[tuple[str, dict]]:
+    rows = []
+    for row in _raw({"op": "plan_list"}).get("plans", []):
+        if isinstance(row, dict):
+            rows.append(("project", row))
+    for row in _raw({"op": "remote_plan_list"}).get("plans", []):
+        if isinstance(row, dict):
+            rows.append(("remote", row))
+    return rows
+
+
+def _current_task(include_latest: bool = False) -> tuple[str, dict] | None:
+    rows = _all_plan_rows()
+    active = [
+        item for item in rows
+        if item[1].get("status") in ACTIVE_PLAN_STATUSES
+    ]
+    if len(active) > 1:
+        raise ValueError(
+            "more than one active plan exists; cancel the extra plan before continuing"
+        )
+    if active:
+        return active[0]
+    if not include_latest or not rows:
+        return None
+    rows.sort(
+        key=lambda item: float(item[1].get("updated") or item[1].get("created") or 0),
+        reverse=True,
+    )
+    return rows[0]
+
+
+def _sole_target() -> str:
+    targets = _raw({"op": "target_list"}).get("targets", [])
+    if len(targets) != 1:
+        if not targets:
+            raise ValueError(
+                "no active project and no SSH target is configured"
+            )
+        raise ValueError(
+            "more than one SSH target is configured; automatic target selection "
+            "requires exactly one target"
+        )
+    name = targets[0].get("name")
+    if not isinstance(name, str) or not valid_name(name):
+        raise ValueError("configured SSH target has an invalid name")
+    return name
+
+
+def _plan_command(kind: str, row: dict, action: str) -> list[str]:
+    if kind == "remote":
+        return ["remote-plan-" + action, row["target"], row["id"]]
+    return ["plan-" + action, row["project"], row["id"]]
+
+
+def _pending_deviation(kind: str, row: dict) -> tuple[str, dict]:
+    if kind == "remote":
+        view = _raw({
+            "op": "remote_plan_show",
+            "target": row["target"],
+            "id": row["id"],
+        })
+    else:
+        view = _raw({
+            "op": "plan_show",
+            "project": row["project"],
+            "id": row["id"],
+        })
+    plan = view.get("plan") if isinstance(view, dict) else None
+    deviations = plan.get("deviations", []) if isinstance(plan, dict) else []
+    pending = [
+        item for item in deviations
+        if isinstance(item, dict) and item.get("status") == "pending"
+    ]
+    if len(pending) != 1:
+        raise ValueError(
+            "current task does not have exactly one pending deviation"
+        )
+    return kind, pending[0]
 
 
 def select_project(rest: list[str]) -> tuple[str, list[str]]:
@@ -86,118 +172,112 @@ def select_project(rest: list[str]) -> tuple[str, list[str]]:
 
 
 def _plan(rest: list[str]) -> int:
-    # Global/local/remote plan listing does not require an active context.
     if rest[:1] == ["list"]:
-        if len(rest) == 1:
-            context = os.environ.get("CTX_CONTEXT", "")
-            return agent_cli.main(["plan-list", context] if context else ["plan-list"])
-        if len(rest) == 3 and rest[1] == "--project":
-            return agent_cli.main(["plan-list", rest[2]])
-        if len(rest) == 3 and rest[1] == "--target":
-            return agent_cli.main(["remote-plan-list", rest[2]])
-        return fail(
-            "usage: ctx agent plan list [--project NAME | --target NAME]"
+        if len(rest) != 1:
+            return fail("usage: ctx agent plan list")
+        rows = [row for _, row in _all_plan_rows()]
+        rows.sort(
+            key=lambda row: float(row.get("updated") or row.get("created") or 0),
+            reverse=True,
         )
+        agent_cli._print_plan_list({"plans": rows})
+        return 0
 
-    if rest[:1] == ["--target"]:
-        if len(rest) < 3:
-            return fail('usage: ctx agent plan --target NAME "GOAL"')
-        target, args = rest[1], rest[2:]
-        if not valid_name(target):
-            return fail("invalid SSH target name")
-        if args[0] in ("show", "cancel", "events"):
-            action = "remote-plan-" + args[0]
-            if len(args) > 2:
-                return fail(
-                    f"usage: ctx agent plan --target NAME {args[0]} [PLAN_ID]"
-                )
-            return agent_cli.main([action, target, *args[1:]])
-        if len(args) != 1 or not args[0]:
-            return fail('usage: ctx agent plan --target NAME "GOAL"')
-        return agent_cli.main(["remote-plan-create", target, args[0]])
-
-    project, args = select_project(rest)
-    if not args:
-        return fail('usage: ctx agent plan [--project NAME] "GOAL"')
-    if args[0] in ("show", "diff", "apply", "cancel"):
-        action = "plan-" + args[0]
-        if len(args) > 2:
-            return fail(f"usage: ctx agent plan {args[0]} [PLAN_ID]")
-        return agent_cli.main([action, project, *args[1:]])
-    if len(args) != 1 or not args[0]:
-        return fail('usage: ctx agent plan [--project NAME] "GOAL"')
-    return agent_cli.main(["plan-create", project, args[0]])
-
-
-def _progress(rest: list[str]) -> int:
-    if rest[:1] == ["--target"]:
-        if len(rest) not in (2, 3):
-            return fail(
-                "usage: ctx agent progress --target NAME [PLAN_ID]"
-            )
-        target = rest[1]
-        if not valid_name(target):
-            return fail("invalid SSH target name")
-        return agent_cli.main([
-            "remote-plan-progress", target, *rest[2:]
-        ])
+    if rest and rest[0] in ("show", "cancel", "diff", "apply"):
+        if len(rest) != 1:
+            return fail(f"usage: ctx agent plan {rest[0]}")
+        current = _current_task(include_latest=True)
+        if current is None:
+            return fail("there is no current plan")
+        kind, row = current
+        action = rest[0]
+        if action in ("diff", "apply") and kind == "remote":
+            return fail(f"ctx agent plan {action} applies only to local project plans")
+        return agent_cli.main(_plan_command(kind, row, action))
 
     if rest[:1] == ["--project"]:
-        if len(rest) not in (2, 3):
-            return fail(
-                "usage: ctx agent progress --project NAME [PLAN_ID]"
-            )
+        if len(rest) != 3 or not rest[2]:
+            return fail('usage: ctx agent plan --project NAME "GOAL"')
+        if _current_task() is not None:
+            return fail("finish or cancel the current task before creating another")
         project = rest[1]
         if not valid_name(project):
             return fail("invalid project name")
-        return agent_cli.main([
-            "plan-progress", project, *rest[2:]
-        ])
+        return agent_cli.main(["plan-create", project, rest[2]])
 
-    if len(rest) > 1:
-        return fail(
-            "usage: ctx agent progress [--project NAME | --target NAME] [PLAN_ID]"
-        )
-    project = os.environ.get("CTX_CONTEXT", "")
-    if not project:
-        return fail(
-            "no active ctx context; provide --project NAME or --target NAME"
-        )
-    if not valid_name(project):
-        return fail("invalid agent project name")
-    return agent_cli.main(["plan-progress", project, *rest])
+    if len(rest) != 1 or not rest[0]:
+        return fail('usage: ctx agent plan "GOAL"')
+    if _current_task() is not None:
+        return fail("finish or cancel the current task before creating another")
+
+    context = os.environ.get("CTX_CONTEXT", "")
+    if context:
+        if not valid_name(context):
+            return fail("invalid active ctx context")
+        return agent_cli.main(["plan-create", context, rest[0]])
+
+    target = _sole_target()
+    return agent_cli.main(["remote-plan-create", target, rest[0]])
+
+
+def _progress(rest: list[str]) -> int:
+    if rest:
+        return fail("usage: ctx agent progress")
+    current = _current_task(include_latest=True)
+    if current is None:
+        return fail("there is no current plan")
+    kind, row = current
+    return agent_cli.main(_plan_command(kind, row, "progress"))
 
 
 def _approval(action: str, rest: list[str]) -> int:
-    if rest[:1] == ["--target"]:
-        if len(rest) < 2 or len(rest) > 3:
-            return fail(
-                f"usage: ctx agent {action} --target NAME [PLAN_ID]"
-            )
-        target = rest[1]
-        if not valid_name(target):
-            return fail("invalid SSH target name")
-        return agent_cli.main(
-            ["remote-plan-" + action, target, *rest[2:]]
+    if rest:
+        return fail(f"usage: ctx agent {action}")
+    current = _current_task()
+    if current is None:
+        return fail("there is no active task waiting for a decision")
+    kind, row = current
+
+    if row.get("status") == "awaiting_deviation":
+        _, deviation = _pending_deviation(kind, row)
+        prefix = "remote-" if kind == "remote" else ""
+        return agent_cli.main([
+            prefix + "deviation-" + action,
+            deviation["id"],
+        ])
+
+    if row.get("status") != "awaiting_approval":
+        return fail(
+            f"current task is {row.get('status', 'unknown')}; "
+            f"nothing is waiting for {action}"
         )
-    project, args = select_project(rest)
-    if len(args) > 1:
-        return fail(f"usage: ctx agent {action} [--project NAME] [PLAN_ID]")
-    return agent_cli.main(["plan-" + action, project, *args])
+    return agent_cli.main(_plan_command(kind, row, action))
 
 
 def _deviation(rest: list[str]) -> int:
-    if len(rest) != 2 or rest[0] not in ("show", "approve", "reject"):
-        return fail("usage: ctx agent deviation show|approve|reject DEVIATION_ID")
-    return agent_cli.main(["deviation-" + rest[0], rest[1]])
+    if not rest or rest[0] not in ("show", "approve", "reject"):
+        return fail("usage: ctx agent deviation show|approve|reject")
+    if len(rest) > 2:
+        return fail("usage: ctx agent deviation show|approve|reject [DEVIATION_ID]")
+
+    current = _current_task()
+    if current is None:
+        return fail("there is no active task")
+    kind, row = current
+
+    if len(rest) == 2:
+        did = rest[1]
+    else:
+        _, deviation = _pending_deviation(kind, row)
+        did = deviation["id"]
+
+    prefix = "remote-" if kind == "remote" else ""
+    return agent_cli.main([prefix + "deviation-" + rest[0], did])
 
 
 def _remote_deviation(rest: list[str]) -> int:
-    if len(rest) != 2 or rest[0] not in ("show", "approve", "reject"):
-        return fail(
-            "usage: ctx agent remote-deviation show|approve|reject DEVIATION_ID"
-        )
-    return agent_cli.main(["remote-deviation-" + rest[0], rest[1]])
+    # Backward-compatible alias. Normal use should call ctx agent deviation ...
+    return _deviation(rest)
 
 
 def _target(rest: list[str]) -> int:
@@ -263,21 +343,15 @@ def main(argv=None) -> int:
         if action in ("approve", "reject"):
             return _approval(action, rest)
         if action == "deviations":
-            if rest[:1] == ["--target"]:
-                if len(rest) != 2 or not valid_name(rest[1]):
-                    return fail("usage: ctx agent deviations --target NAME")
-                return agent_cli.main(["remote-deviation-list", rest[1]])
-            if not rest:
-                context = os.environ.get("CTX_CONTEXT", "")
-                return agent_cli.main(
-                    ["deviation-list", context] if context else ["deviation-list"]
-                )
-            project, args = select_project(rest)
-            if args:
-                return fail(
-                    "usage: ctx agent deviations [--project NAME | --target NAME]"
-                )
-            return agent_cli.main(["deviation-list", project])
+            if rest:
+                return fail("usage: ctx agent deviations")
+            current = _current_task()
+            if current is None:
+                return fail("there is no active task")
+            kind, row = current
+            if kind == "remote":
+                return agent_cli.main(["remote-deviation-list", row["target"]])
+            return agent_cli.main(["deviation-list", row["project"]])
         if action == "deviation":
             return _deviation(rest)
         if action == "remote-deviation":
@@ -294,7 +368,16 @@ def main(argv=None) -> int:
         if action == "status":
             if len(rest) > 1:
                 return fail("usage: ctx agent status [JOB_ID]")
-            return agent_cli.main(["show", rest[0]] if rest else ["health"])
+            if rest:
+                return agent_cli.main(["show", rest[0]])
+            try:
+                current = _current_task(include_latest=True)
+            except (OSError, RuntimeError, ValueError, KeyError):
+                current = None
+            if current is None:
+                return agent_cli.main(["health"])
+            kind, row = current
+            return agent_cli.main(_plan_command(kind, row, "progress"))
 
         if action == "logs":
             if len(rest) != 1:
