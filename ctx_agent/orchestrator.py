@@ -544,6 +544,15 @@ or a real human preference. Never ask the owner for something you can inspect.
     value["owner_request"] = str(value.get("owner_request", "")).strip()[:500]
     risk = str(value.get("risk", "medium")).lower()
     value["risk"] = risk if risk in ("low", "medium", "high") else "medium"
+    if value["owner_needed"] and not value["owner_request"]:
+        value["owner_needed"] = False
+        value["agreement"] = False
+        correction = (
+            "A boss escalation requires exactly one concrete owner_request. "
+            "Clarify the decision internally before escalating."
+        )
+        value["guidance_to_manager"] = correction
+        value["better_strategy"] = correction
     return value
 
 
