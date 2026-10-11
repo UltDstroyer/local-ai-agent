@@ -364,6 +364,37 @@ class RemoteStore:
             self.event(pid, "remote_plan_cancelled_by_owner")
         return ok
 
+    def fail_internal_plan(
+        self, pid: str, result: str, context: dict | None = None
+    ) -> bool:
+        """Terminate an active plan as an internal failure, never as owner cancellation."""
+        now = time.time()
+        encoded_context = json.dumps(context) if isinstance(context, dict) else None
+        with self.lock, self.db:
+            if encoded_context is None:
+                cur = self.db.execute(
+                    "UPDATE remote_plans SET status='failed_internal',result=?,updated=? "
+                    "WHERE id=? AND status IN ('approved','running','awaiting_deviation','ready_for_review')",
+                    (str(result)[:6000], now, pid),
+                )
+            else:
+                cur = self.db.execute(
+                    "UPDATE remote_plans SET status='failed_internal',result=?,"
+                    "context_json=?,updated=? WHERE id=? AND status IN "
+                    "('approved','running','awaiting_deviation','ready_for_review')",
+                    (str(result)[:6000], encoded_context, now, pid),
+                )
+            ok = cur.rowcount == 1
+            if ok:
+                self.db.execute(
+                    "UPDATE remote_deviations SET status='superseded',updated=? "
+                    "WHERE plan=? AND status='pending'",
+                    (now, pid),
+                )
+        if ok:
+            self.event(pid, "remote_plan_failed_internal", str(result)[:1200])
+        return ok
+
     def retry_internal_plan(self, pid: str) -> bool:
         """Requeue only an internal failure or a legacy non-owner cancellation."""
         with self.lock, self.db:
