@@ -484,6 +484,41 @@ if __name__ == "__main__":
     unittest.main()
 
 
+
+
+    def test_remote_exec_cannot_bypass_dependency_approval(self):
+        b = RemoteBudget.from_dict(budget(
+            allow_remote_admin=True,
+            allow_sudo=True,
+        ))
+        with self.assertRaisesRegex(
+            RemoteContractError,
+            "must use a typed action",
+        ):
+            validate_remote_action({
+                "op": "remote_exec",
+                "command": "sudo apt-get install -y cloudflared",
+                "as_root": True,
+                "timeout": 900,
+            }, b)
+
+    def test_remote_exec_cannot_bypass_service_approval(self):
+        b = RemoteBudget.from_dict(budget(
+            allow_remote_admin=True,
+            allow_sudo=True,
+        ))
+        with self.assertRaisesRegex(
+            RemoteContractError,
+            "must use a typed action",
+        ):
+            validate_remote_action({
+                "op": "remote_exec",
+                "command": "systemctl restart cloudflared",
+                "as_root": True,
+                "timeout": 120,
+            }, b)
+
+
 class RemoteInvalidProposalRecoveryTests(unittest.TestCase):
     def test_repeated_invalid_proposal_is_recovered_internally(self):
         # The manager should recover malformed Codex action batches without
@@ -631,12 +666,15 @@ class RemoteDependencyApprovalTests(unittest.TestCase):
         self.assertEqual(request["type"], "service_activation")
         self.assertIn("cloudflared.service", request["boss_request"])
 
-    def test_service_restart_does_not_create_new_dependency_approval(self):
-        self.assertIsNone(_dependency_key({
-            "op": "service",
-            "service": "nginx.service",
-            "action": "restart",
-        }))
+    def test_first_service_restart_requires_dependency_approval(self):
+        self.assertEqual(
+            _dependency_key({
+                "op": "service",
+                "service": "nginx.service",
+                "action": "restart",
+            }),
+            "service:nginx",
+        )
 
     def test_manager_cannot_auto_approve_package_install(self):
         plan = RemotePlan.from_dict({
