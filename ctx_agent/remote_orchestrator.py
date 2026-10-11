@@ -657,6 +657,17 @@ def _human_input_error(input_request: object) -> str | None:
         "output of",
         "journal",
         "systemctl",
+        " path",
+        "_path",
+        "file path",
+        "credential path",
+        "credentials path",
+        "config path",
+        "configuration path",
+        "where is",
+        "where are",
+        "location of",
+        "located at",
     )
     if any(marker in combined for marker in observable_markers):
         return (
