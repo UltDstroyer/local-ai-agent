@@ -14,6 +14,8 @@ from .agent import ask, run_agent
 from .codex_bridge import BridgeError
 from .contracts import ContractError, Plan, analyze_changes, contract_violations
 from .manager_brief import manager_deviation_brief
+from .manager_report import manager_progress_report
+from .management import ensure_management_contract, recovery_delta
 from .governance import (
     owner_decision_key,
     valid_local_owner_request,
@@ -271,6 +273,147 @@ class Coordinator:
                 if state.get("active")
             )
 
+    def _owner_policy_path(self) -> Path:
+        return self.settings.state_dir / "owner-policy.json"
+
+    def _load_owner_policy(self) -> dict:
+        try:
+            value = json.loads(self._owner_policy_path().read_text())
+            if isinstance(value, dict):
+                return value
+        except (OSError, ValueError, TypeError):
+            pass
+        return {
+            "explicit_preferences": [],
+            "decision_evidence": [],
+        }
+
+    def _save_owner_policy(self, policy: dict):
+        path = self._owner_policy_path()
+        temp = path.with_suffix(".tmp")
+        temp.write_text(json.dumps(policy, indent=2, ensure_ascii=False))
+        temp.replace(path)
+
+    def _record_owner_decision_evidence(
+        self, *, outcome: str, request: dict, scope: str
+    ):
+        policy = self._load_owner_policy()
+        evidence = list(policy.get("decision_evidence") or [])
+        proposed = request.get("proposed_action") or request.get("action") or {}
+        evidence.append({
+            "at": time.time(),
+            "scope": scope,
+            "outcome": outcome,
+            "type": str(request.get("type", ""))[:80],
+            "risk": str(request.get("risk", ""))[:30],
+            "operation": (
+                str(proposed.get("op", ""))[:80]
+                if isinstance(proposed, dict) else ""
+            ),
+            "subject": (
+                str(proposed.get("service") or proposed.get("path") or "")[:240]
+                if isinstance(proposed, dict) else ""
+            ),
+        })
+        policy["decision_evidence"] = evidence[-120:]
+        self._save_owner_policy(policy)
+
+    def _learn_explicit_owner_preferences(self, message: str):
+        """Learn only preferences the owner explicitly states, never inferred traits."""
+        policy = self._load_owner_policy()
+        try:
+            reply = ask(
+                self.settings,
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Extract only explicit durable work preferences. "
+                            "Do not infer personality, identity, beliefs, or unstated preferences. "
+                            "Return strict JSON only."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            "Owner message:\n" + message[:4000] +
+                            "\n\nReturn JSON: "
+                            '{"preferences":[{"rule":"short explicit preference",'
+                            '"evidence":"brief quote/paraphrase from the owner"}]}. '
+                            "If there is no explicit durable preference, return an empty list."
+                        ),
+                    },
+                ],
+                "balanced" if self.mode == "quiet" else self.mode,
+                tools=[],
+                json_mode=True,
+                num_predict=500,
+                num_ctx=4096,
+            )
+            value = json.loads(str(reply.get("content", "")))
+            prefs = value.get("preferences") if isinstance(value, dict) else []
+        except Exception:
+            prefs = []
+        if not isinstance(prefs, list):
+            prefs = []
+        existing = [
+            item for item in policy.get("explicit_preferences", [])
+            if isinstance(item, dict) and isinstance(item.get("rule"), str)
+        ]
+        known = {item["rule"].strip().lower() for item in existing}
+        for item in prefs[:6]:
+            if not isinstance(item, dict):
+                continue
+            rule = str(item.get("rule", "")).strip()[:500]
+            evidence = str(item.get("evidence", "")).strip()[:700]
+            if not rule or rule.lower() in known:
+                continue
+            existing.append({
+                "rule": rule,
+                "evidence": evidence,
+                "recorded_at": time.time(),
+            })
+            known.add(rule.lower())
+        policy["explicit_preferences"] = existing[-80:]
+        self._save_owner_policy(policy)
+
+    def _plan_lineage(self, row: dict, *, remote: bool) -> list[dict]:
+        store = self.remote_store if remote else self.store
+        lineage = []
+        seen = set()
+        current = row
+        while current and current.get("id") not in seen and len(lineage) < 8:
+            seen.add(current.get("id"))
+            lineage.append(current)
+            parent = str(
+                (current.get("context") or {}).get("recovery_of_plan_id", "")
+            ).strip()
+            current = store.get_plan(parent) if parent else None
+        lineage.reverse()
+        return lineage
+
+    def _manager_report(self, row: dict, *, remote: bool) -> dict:
+        store = self.remote_store if remote else self.store
+        lineage = self._plan_lineage(row, remote=remote)
+        events = []
+        deviations = []
+        for item in lineage:
+            events.extend(store.events(item["id"]))
+            deviations.extend(store.list_deviations(plan=item["id"]))
+        report = manager_progress_report(
+            self.settings,
+            lineage,
+            events,
+            deviations,
+            self.mode,
+            owner_policy=self._load_owner_policy(),
+        )
+        return {
+            "report": report,
+            "plan_ids": [item["id"] for item in lineage],
+            "current_plan_id": row["id"],
+        }
+
     def _manager_chat(self, row: dict, message: str, *, remote: bool) -> dict:
         if not isinstance(message, str) or not message.strip() or len(message) > 4000:
             raise ValueError("Manager chat message must be 1 to 4000 characters")
@@ -374,6 +517,7 @@ secret values or request secrets through chat; use the secure input flow.
             "owner_manager_chat",
             "Owner guidance added through manager chat.",
         )
+        self._learn_explicit_owner_preferences(message)
         return {
             "reply": answer,
             "plan_id": row["id"],
@@ -605,6 +749,16 @@ secret values or request secrets through chat; use the secure input flow.
                     target=data.get("target") or None
                 )
             }
+        if op == "remote_plan_report":
+            target_name = data.get("target", "")
+            pid = data.get("id", "")
+            row = (
+                self.remote_store.get_plan(pid)
+                if pid else self.remote_store.latest_plan(target_name)
+            )
+            if not row or (target_name and row["target"] != target_name):
+                raise ValueError("No such remote plan")
+            return self._manager_report(row, remote=True)
         if op == "remote_plan_chat":
             target_name = data.get("target", "")
             pid = data.get("id", "")
@@ -892,6 +1046,10 @@ secret values or request secrets through chat; use the secure input flow.
                     for row in self.store.list_plans(project=project)
                 ]
             }
+        if op == "plan_report":
+            project = data.get("project", "")
+            row = self._plan(project, data.get("id", ""))
+            return self._manager_report(row, remote=False)
         if op == "plan_chat":
             project = data.get("project", "")
             row = self._plan(project, data.get("id", ""))
