@@ -445,7 +445,11 @@ class SSHBridge:
         ):
             raise SSHBridgeError("invalid input values")
         action = validate_remote_action(
-            _resolve_action_inputs(raw_action, inputs), budget
+            _resolve_action_inputs(raw_action, inputs),
+            budget,
+            allow_critical_remote_exec=(
+                request.get("critical_owner_approved") is True
+            ),
         )
         if action["op"] == "read_file":
             result = _read_file(target, budget, action)
