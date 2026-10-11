@@ -149,7 +149,12 @@ def inspect_target(settings, target: RemoteTarget) -> dict:
     return result
 
 
-def _planner_prompt(goal: str, target: RemoteTarget, inspection: str) -> str:
+def _planner_prompt(
+    goal: str,
+    target: RemoteTarget,
+    inspection: str,
+    owner_policy: dict | None = None,
+) -> str:
     return f"""You are the primary systems engineer planning work on an SSH-only remote
 machine. You cannot use SSH directly. The ctx-agent SSH broker executes only
 typed actions after owner approval.
@@ -162,6 +167,12 @@ Target:
 
 Read-only inspection:
 {inspection[:30000]}
+
+Explicit owner work preferences and decision evidence:
+{json.dumps(owner_policy or {})[:5000]}
+
+Treat explicit current instructions as higher priority than historical preference
+evidence. Past approvals are context, never blanket authorization.
 
 Create the smallest practical plan. Do not perform actions. Return JSON only:
 
@@ -208,7 +219,11 @@ contract whenever required. Never include secret values in the plan."""
 
 
 def _admin_reconcile_prompt(
-    goal: str, candidate: dict, target: RemoteTarget, inspection: str
+    goal: str,
+    candidate: dict,
+    target: RemoteTarget,
+    inspection: str,
+    owner_policy: dict | None = None,
 ) -> str:
     return f"""You are the local ctx-agent administrator. Codex is the primary systems
 engineer. Reconcile its proposal into the narrowest viable remote mutation
@@ -225,6 +240,12 @@ Codex proposal:
 
 Inspection:
 {inspection[:20000]}
+
+Explicit owner work preferences and decision evidence:
+{json.dumps(owner_policy or {})[:5000]}
+
+Preferences guide how to accomplish the work but never grant unapproved
+authority or turn a previous approval into permanent permission.
 
 Preserve the technical plan when sound, but remove speculative paths, packages,
 services, domains, and capabilities. Backups must remain required where
@@ -376,6 +397,7 @@ def create_remote_plan(
     goal: str,
     mode: str,
     progress=None,
+    owner_policy: dict | None = None,
 ) -> dict:
     if settings.codex_bridge_socket is None:
         raise RemoteOrchestrationError("Codex bridge is not configured")
@@ -403,7 +425,7 @@ def create_remote_plan(
             "op": "consult",
             "cwd": str(context_dir),
             "prompt": _planner_prompt(
-                goal, target, inspection.get("output", "")
+                goal, target, inspection.get("output", ""), owner_policy
             ),
             "timeout": 900,
         },
@@ -437,6 +459,7 @@ def create_remote_plan(
                     candidate,
                     target,
                     inspection.get("output", ""),
+                    owner_policy,
                 ),
             },
         ],
