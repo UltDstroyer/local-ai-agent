@@ -888,14 +888,19 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
             return
 
         context["next_guidance"] = ""
+        manager_note = str(
+            final_state.get("context_note")
+            or final_state.get("reason")
+            or "Final verification passed within the approved mutation contract."
+        )[:3000]
         store.update_plan(
             plan.id,
             status="ready_for_review",
             context=context,
             result=(
-                "Codex and Qwen completed final verification within the approved "
+                "Qwen manager: final verification passed within the approved "
                 "mutation contract. Final owner review and explicit apply are required.\n\n"
-                "Codex review:\n" + review.get("message", "")[:12000]
+                + manager_note
             ),
             attempts=0,
         )
