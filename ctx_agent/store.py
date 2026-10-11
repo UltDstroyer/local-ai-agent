@@ -340,21 +340,43 @@ class Store:
         did = uuid.uuid4().hex[:12]
         now = time.time()
         with self.lock, self.db:
+            plan_row = self.db.execute(
+                "SELECT status FROM plans WHERE id=?", (plan,)
+            ).fetchone()
+            if not plan_row:
+                raise ValueError("cannot create deviation for missing plan")
+
             existing = self.db.execute(
                 "SELECT id FROM deviations WHERE plan=? AND status='pending' "
                 "ORDER BY created DESC LIMIT 1",
                 (plan,),
             ).fetchone()
             if existing:
-                return existing["id"]
+                if plan_row["status"] == "awaiting_deviation":
+                    return existing["id"]
+                self.db.execute(
+                    "UPDATE deviations SET status='superseded',updated=? "
+                    "WHERE id=? AND status='pending'",
+                    (now, existing["id"]),
+                )
+
+            if plan_row["status"] != "running":
+                raise ValueError(
+                    "plan is no longer running; refusing stale deviation"
+                )
+            cur = self.db.execute(
+                "UPDATE plans SET status='awaiting_deviation',updated=? "
+                "WHERE id=? AND status='running'",
+                (now, plan),
+            )
+            if cur.rowcount != 1:
+                raise ValueError(
+                    "plan changed concurrently; refusing stale deviation"
+                )
             self.db.execute(
                 "INSERT INTO deviations(id,plan,project,status,reason,request_json,created,updated) "
                 "VALUES (?,?,?,?,?,?,?,?)",
                 (did, plan, project, "pending", reason[:4000], json.dumps(request), now, now),
-            )
-            self.db.execute(
-                "UPDATE plans SET status='awaiting_deviation',updated=? WHERE id=?",
-                (now, plan),
             )
         self.event(plan, "deviation_requested", did + ": " + reason[:1000])
         return did
