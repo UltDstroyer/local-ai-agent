@@ -42,6 +42,7 @@ Codex project workflow:
   ctx agent progress [--project NAME | --target NAME] [PLAN_ID]
   ctx agent chat [--project NAME | --target NAME] "MESSAGE"
   ctx agent report [--project NAME | --target NAME] [PLAN_ID]
+  ctx agent console [--project NAME | --target NAME] [PLAN_ID]
   ctx agent approve [--project NAME] [PLAN_ID]
   ctx agent reject [--project NAME] [PLAN_ID]
   ctx agent deviations [--project NAME]
@@ -344,6 +345,119 @@ def _progress(rest: list[str]) -> int:
         ])
     return agent_cli.main([
         "plan-progress", plan["project"], plan["id"]
+    ])
+
+
+
+def _console(rest: list[str]) -> int:
+    local_plans, remote_plans, _, _ = _global_state()
+    active = {
+        "awaiting_approval", "approved", "running",
+        "awaiting_deviation", "ready_for_review", "failed_internal",
+    }
+
+    if rest[:1] == ["--target"]:
+        if len(rest) not in (2, 3):
+            return fail(
+                "usage: ctx agent console --target NAME [PLAN_ID]"
+            )
+        target = rest[1]
+        if not valid_name(target):
+            return fail("invalid SSH target name")
+        pid = rest[2] if len(rest) == 3 else ""
+        candidates = [
+            item for item in remote_plans
+            if item.get("target") == target
+            and item.get("status") in active
+            and (not pid or item.get("id") == pid)
+        ]
+        if not candidates:
+            raise ValueError("target has no matching active manager plan")
+        plan = max(
+            candidates,
+            key=lambda item: float(
+                item.get("updated") or item.get("created") or 0
+            ),
+        )
+        return agent_cli.main([
+            "remote-plan-console", target, plan["id"]
+        ])
+
+    if rest[:1] == ["--project"]:
+        if len(rest) not in (2, 3):
+            return fail(
+                "usage: ctx agent console --project NAME [PLAN_ID]"
+            )
+        project = rest[1]
+        if not valid_name(project):
+            return fail("invalid project name")
+        pid = rest[2] if len(rest) == 3 else ""
+        candidates = [
+            item for item in local_plans
+            if item.get("project") == project
+            and item.get("status") in active
+            and (not pid or item.get("id") == pid)
+        ]
+        if not candidates:
+            raise ValueError("project has no matching active manager plan")
+        plan = max(
+            candidates,
+            key=lambda item: float(
+                item.get("updated") or item.get("created") or 0
+            ),
+        )
+        return agent_cli.main([
+            "plan-console", project, plan["id"]
+        ])
+
+    if len(rest) > 1:
+        return fail(
+            "usage: ctx agent console [--project NAME | --target NAME] [PLAN_ID]"
+        )
+
+    project = os.environ.get("CTX_CONTEXT", "")
+    pid = rest[0] if rest else ""
+    if project:
+        if not valid_name(project):
+            raise ValueError("invalid active project name")
+        candidates = [
+            item for item in local_plans
+            if item.get("project") == project
+            and item.get("status") in active
+            and (not pid or item.get("id") == pid)
+        ]
+        if not candidates:
+            raise ValueError("active project has no matching manager plan")
+        plan = max(
+            candidates,
+            key=lambda item: float(
+                item.get("updated") or item.get("created") or 0
+            ),
+        )
+        return agent_cli.main([
+            "plan-console", project, plan["id"]
+        ])
+
+    candidates = [
+        ("project", item) for item in local_plans
+        if item.get("status") in active
+        and (not pid or item.get("id") == pid)
+    ] + [
+        ("target", item) for item in remote_plans
+        if item.get("status") in active
+        and (not pid or item.get("id") == pid)
+    ]
+    if len(candidates) != 1:
+        raise ValueError(
+            "no single manager console to attach; provide --project NAME or --target NAME"
+        )
+    kind, plan = candidates[0]
+    if kind == "target":
+        return agent_cli.main([
+            "remote-plan-console", plan["target"], plan["id"]
+        ])
+    return agent_cli.main([
+        "plan-console", plan["project"], plan["id"]
     ])
 
 
@@ -755,6 +869,8 @@ def main(argv=None) -> int:
             return _chat(rest)
         if action == "report":
             return _report(rest)
+        if action == "console":
+            return _console(rest)
         if action in ("approve", "reject"):
             return _approval(action, rest)
         if action == "deviations":
