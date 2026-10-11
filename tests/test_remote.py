@@ -30,6 +30,7 @@ from ctx_agent.remote_orchestrator import (
     _is_remote_action_format_error,
     _manager_dependency_review,
     _manager_scope_review,
+    _normalize_human_input_request,
     _remote_actions_error,
     _remote_context_dir,
     _scope_risk,
@@ -40,6 +41,7 @@ from ctx_agent.remote_store import RemoteStore
 from ctx_agent.ssh_bridge import (
     SSHBridge,
     SSHBridgeError,
+    _redact_input_values,
     _redact_result_outputs,
     _resolve_action_inputs,
     _ssh_base,
@@ -1116,6 +1118,36 @@ class BossManagerEmployeeInvariantTests(unittest.TestCase):
                 _owner_action_key(action),
                 approved["context"]["approved_action_leases"],
             )
+
+
+
+    def test_secret_like_input_is_forced_sensitive(self):
+        request = _normalize_human_input_request({
+            "key": "cloudflare_token",
+            "prompt": "Cloudflare token",
+            "reason": "Needed to authenticate the tunnel.",
+            "sensitive": False,
+        })
+        self.assertIsNotNone(request)
+        self.assertTrue(request["sensitive"])
+
+    def test_non_secret_human_fact_can_remain_visible(self):
+        request = _normalize_human_input_request({
+            "key": "tunnel_name",
+            "prompt": "Existing tunnel name",
+            "reason": "Needed to choose which tunnel to configure.",
+            "sensitive": False,
+        })
+        self.assertIsNotNone(request)
+        self.assertFalse(request["sensitive"])
+
+    def test_input_values_are_redacted_from_exception_text(self):
+        text = _redact_input_values(
+            "authentication rejected token super-secret",
+            {"cloudflare_token": "super-secret"},
+        )
+        self.assertNotIn("super-secret", text)
+        self.assertIn("[REDACTED]", text)
 
 
 class CriticalRemoteExecApprovalTests(unittest.TestCase):
