@@ -691,7 +691,7 @@ contain exactly key, prompt, reason, and sensitive. Ask for only one value.
 Never include or infer the value itself. Never ask the owner for observable
 machine state such as service status, configuration state, logs, reachability,
 or command output. Qwen and Codex must inspect those themselves."""
-    return _ask_json_object(
+    value = _ask_json_object(
         settings,
         [
             {
@@ -704,6 +704,21 @@ or command output. Qwen and Codex must inspect those themselves."""
         num_predict=2048,
         num_ctx=12288,
     )
+    input_error = _human_input_error(value.get("input_request"))
+    if input_error:
+        # Observable machine state is not a boss input. Convert this into an
+        # internal replan and send Qwen/Codex back to inspect it themselves.
+        value["owner_needed"] = False
+        value["owner_request"] = ""
+        value["input_request"] = None
+        correction = (
+            "Manager correction: do not ask the owner for observable system "
+            "state. Inspect it directly and continue. "
+        )
+        value["codex_guidance"] = correction + str(
+            value.get("codex_guidance", "")
+        )[:2400]
+    return value
 
 
 def _repair_invalid_action_batch(settings, plan: RemotePlan, milestone: str, proposal: dict, error: str, mode: str) -> dict:
