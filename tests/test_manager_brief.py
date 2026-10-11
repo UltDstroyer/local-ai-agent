@@ -8,7 +8,13 @@ from contextlib import redirect_stderr
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from ctx_agent.cli import _follow_approved_plan, _print_live_deviation, _prompt_human_input
+from ctx_agent.cli import (
+    _follow_approved_plan,
+    _print_live_deviation,
+    _prompt_human_input,
+    _show_pending_deviation,
+    main as cli_main,
+)
 from ctx_agent.manager_brief import manager_deviation_brief
 
 
@@ -230,6 +236,75 @@ class LiveDeviationWatcherTests(unittest.TestCase):
 
         self.assertEqual(calls["show"], 2)
         self.assertGreaterEqual(calls["progress"], 3)
+
+
+    def test_sanitized_deviation_summary_still_matches_live_plan(self):
+        calls = []
+
+        def fake_call(path, payload, timeout=900):
+            calls.append(payload)
+            if payload["op"] == "remote_deviation_list":
+                return {
+                    "deviations": [{
+                        "id": "abc123def456",
+                        "plan": "plan123",
+                        "target": "pi",
+                        "status": "pending",
+                    }]
+                }
+            if payload["op"] == "remote_deviation_show":
+                return {
+                    "deviation": {
+                        "id": "abc123def456",
+                        "plan": "plan123",
+                        "target": "pi",
+                        "status": "pending",
+                    },
+                    "brief": {
+                        "summary": "Need one owner decision.",
+                        "request": "Allow the requested action.",
+                        "risk": "low",
+                        "recommendation": "Approve.",
+                        "decision": "May I continue?",
+                    },
+                }
+            raise AssertionError(payload)
+
+        with patch("ctx_agent.cli.call", side_effect=fake_call), patch(
+            "ctx_agent.cli._print_live_deviation"
+        ) as shown:
+            result = _show_pending_deviation(
+                "/tmp/fake.sock",
+                remote=True,
+                scope="pi",
+                plan_id="plan123",
+            )
+
+        self.assertTrue(result)
+        shown.assert_called_once()
+        self.assertEqual(calls[0]["op"], "remote_deviation_list")
+        self.assertEqual(calls[1]["op"], "remote_deviation_show")
+
+    def test_deviation_approval_does_not_attach_second_follower(self):
+        with patch(
+            "ctx_agent.cli.call",
+            return_value={
+                "plan": {
+                    "id": "plan123",
+                    "target": "pi",
+                    "status": "approved",
+                }
+            },
+        ), patch("ctx_agent.cli._follow_approved_plan") as follow:
+            rc = cli_main([
+                "--socket",
+                "/tmp/fake.sock",
+                "remote-deviation-approve",
+                "abc123def456",
+            ])
+
+        self.assertEqual(rc, 0)
+        follow.assert_not_called()
 
 
 if __name__ == "__main__":
