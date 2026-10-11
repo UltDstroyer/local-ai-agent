@@ -216,7 +216,7 @@ def _follow_approved_plan(path, plan, *, remote):
             snapshot.get("phase"),
             snapshot.get("current_stage_index"),
             snapshot.get("percent_complete"),
-            (snapshot.get("current_stage_elapsed_seconds") or 0) // 5,
+            snapshot.get("waiting_on"),
         )
         if key != last:
             print(_progress_line(snapshot), file=sys.stderr, flush=True)
