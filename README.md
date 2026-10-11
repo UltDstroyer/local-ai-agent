@@ -341,6 +341,13 @@ deviation, `ctx agent deviation` shows only the current decision with a concise
 summary and recommendation. Historical deviations stay in the audit database
 instead of stacking up in normal terminal output.
 
+Low-risk retry deviations are handled automatically. Qwen must classify the
+deviation as low risk and explicitly safe to auto-approve, and a deterministic
+policy must also confirm that approval does not expand the existing contract.
+Only stalled/retry and system-error deviations can auto-approve. Scope,
+permission, package/service/domain, budget, credential, destructive, manual, and
+final-verification deviations still require the owner.
+
 Approved plans execute autonomously in maximum mode:
 
     ctx agent mode maximum
