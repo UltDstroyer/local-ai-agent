@@ -175,14 +175,14 @@ class Coordinator:
                         self.settings, self.project(row["project"]), row
                     )
                 except Exception:
-                    if self.store.cancel_plan(row["id"]):
-                        self.store.update_plan(
-                            row["id"],
-                            result=(
-                                "An obsolete mutation request could not be safely "
-                                "rolled back during governance recovery."
-                            ),
-                        )
+                    self.store.fail_internal_plan(
+                        row["id"],
+                        (
+                            "An obsolete mutation request could not be safely "
+                            "rolled back during governance recovery."
+                        ),
+                        context=dict(row.get("context", {})),
+                    )
                     continue
             context = dict(row.get("context", {}))
             context["next_guidance"] = (
