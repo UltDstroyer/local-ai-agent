@@ -17,6 +17,8 @@ from ctx_agent.remote import (
 from ctx_agent.remote_orchestrator import (
     _ask_json_object,
     _auto_expand_execution_budget,
+    _owner_action_key,
+    approve_remote_deviation,
     _json_object,
     _completion_review,
     _critical_exec_key,
@@ -1018,6 +1020,102 @@ class BossManagerEmployeeInvariantTests(unittest.TestCase):
                 "reason": "Need a tunnel client.",
             },
         ))
+
+
+
+    def test_owner_service_approval_does_not_persist_global_sudo(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = RemoteStore(Path(td) / "remote.sqlite3")
+            target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
+            store.put_target(target.to_dict())
+            plan = RemotePlan.from_dict({
+                "goal": "Configure tunnel",
+                "milestones": ["Start tunnel"],
+                "verification": ["Tunnel active"],
+                "risks": [],
+                "assumptions": [],
+                "remote_budget": budget(
+                    allow_sudo=False,
+                    allowed_services=[],
+                ),
+            }, "pi")
+            store.create_plan("pi", plan.goal, plan.to_dict())
+            action = {
+                "op": "service",
+                "service": "cloudflared.service",
+                "action": "start",
+            }
+            did = store.create_deviation(
+                plan.id,
+                "pi",
+                "service approval",
+                {
+                    "type": "service_activation",
+                    "proposed_action": action,
+                    "boss_request": "Allow me to start cloudflared.service.",
+                    "risk": "medium",
+                },
+            )
+            approved = approve_remote_deviation(
+                SimpleNamespace(), store, did
+            )
+            stored_plan = approved["plan"]
+            self.assertFalse(
+                stored_plan["remote_budget"]["allow_sudo"]
+            )
+            self.assertEqual(
+                stored_plan["remote_budget"]["allowed_services"],
+                [],
+            )
+            self.assertIn(
+                _owner_action_key(action),
+                approved["context"]["approved_action_leases"],
+            )
+
+    def test_owner_package_approval_is_exact_action_lease(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = RemoteStore(Path(td) / "remote.sqlite3")
+            target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
+            store.put_target(target.to_dict())
+            plan = RemotePlan.from_dict({
+                "goal": "Configure tunnel",
+                "milestones": ["Install tunnel client"],
+                "verification": ["cloudflared exists"],
+                "risks": [],
+                "assumptions": [],
+                "remote_budget": budget(
+                    allow_sudo=False,
+                    allow_package_install=False,
+                    allowed_packages=[],
+                ),
+            }, "pi")
+            store.create_plan("pi", plan.goal, plan.to_dict())
+            action = {
+                "op": "package_install",
+                "packages": ["cloudflared"],
+            }
+            did = store.create_deviation(
+                plan.id,
+                "pi",
+                "package approval",
+                {
+                    "type": "dependency_install",
+                    "proposed_action": action,
+                    "boss_request": "Allow me to install cloudflared.",
+                    "risk": "medium",
+                },
+            )
+            approved = approve_remote_deviation(
+                SimpleNamespace(), store, did
+            )
+            remote_budget = approved["plan"]["remote_budget"]
+            self.assertFalse(remote_budget["allow_sudo"])
+            self.assertFalse(remote_budget["allow_package_install"])
+            self.assertNotIn("cloudflared", remote_budget["allowed_packages"])
+            self.assertIn(
+                _owner_action_key(action),
+                approved["context"]["approved_action_leases"],
+            )
 
 
 class CriticalRemoteExecApprovalTests(unittest.TestCase):
