@@ -396,7 +396,12 @@ def critical_remote_exec_reason(command: str) -> str | None:
     return None
 
 
-def validate_remote_action(action: object, budget: RemoteBudget) -> dict:
+def validate_remote_action(
+    action: object,
+    budget: RemoteBudget,
+    *,
+    allow_critical_remote_exec: bool = False,
+) -> dict:
     if not isinstance(action, dict):
         raise RemoteContractError("remote action must be an object")
     op = action.get("op")
@@ -503,7 +508,7 @@ def validate_remote_action(action: object, budget: RemoteBudget) -> dict:
                 "remote_exec dependency/service mutation must use a typed action"
             )
         critical_reason = critical_remote_exec_reason(command)
-        if critical_reason:
+        if critical_reason and not allow_critical_remote_exec:
             raise RemoteContractError(
                 "critical remote_exec requires owner approval: " + critical_reason
             )
