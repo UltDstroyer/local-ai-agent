@@ -409,7 +409,9 @@ class Store:
         with self.lock, self.db:
             cur = self.db.execute(
                 "UPDATE deviations SET status=?,updated=? "
-                "WHERE id=? AND status='pending'",
+                "WHERE id=? AND status='pending' "
+                "AND EXISTS (SELECT 1 FROM plans p "
+                "WHERE p.id=deviations.plan AND p.status='awaiting_deviation')",
                 (status, time.time(), did),
             )
             ok = cur.rowcount == 1
