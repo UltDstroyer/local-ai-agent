@@ -1933,6 +1933,7 @@ def run_remote_plan_step(
     validated = []
     approved_dependencies = set(context.get("approved_dependencies", []))
     approved_critical_execs = set(context.get("approved_critical_execs", []))
+    critical_batch_seen = set()
     for action in actions:
         critical_key = None
         critical_approved = False
@@ -1943,6 +1944,26 @@ def run_remote_plan_step(
             if critical_reason:
                 critical_key = _critical_exec_key(action)
                 critical_approved = critical_key in approved_critical_execs
+                if critical_approved:
+                    if critical_key in critical_batch_seen:
+                        context["next_guidance"] = (
+                            "Do not repeat the same critical remote action more than "
+                            "once in a single batch. Split the work and re-evaluate "
+                            "after the first critical action."
+                        )
+                        remote_store.update_plan(
+                            plan.id,
+                            status="approved",
+                            attempts=0,
+                            context=context,
+                        )
+                        remote_store.event(
+                            plan.id,
+                            "remote_duplicate_critical_action_rejected",
+                            critical_reason,
+                        )
+                        return
+                    critical_batch_seen.add(critical_key)
                 if not critical_approved:
                     critical_review = _manager_critical_exec_review(
                         settings,
@@ -2333,6 +2354,21 @@ def run_remote_plan_step(
     results = []
     mutations = list(row.get("mutations", []))
     for action in validated:
+        critical_owner_approved = False
+        if action.get("op") == "remote_exec":
+            action_key = _critical_exec_key(action)
+            if action_key in approved_critical_execs:
+                critical_owner_approved = True
+                approved_critical_execs.remove(action_key)
+                context["approved_critical_execs"] = sorted(
+                    approved_critical_execs
+                )[-30:]
+                remote_store.update_plan(plan.id, context=context)
+                remote_store.event(
+                    plan.id,
+                    "remote_critical_exec_lease_consumed",
+                    action_key,
+                )
         result = ssh_bridge_call(
             settings.ssh_bridge_socket,
             {
@@ -2341,10 +2377,7 @@ def run_remote_plan_step(
                 "budget": plan.budget.to_dict(),
                 "action": action,
                 "inputs": inputs,
-                "critical_owner_approved": (
-                    action.get("op") == "remote_exec"
-                    and _critical_exec_key(action) in approved_critical_execs
-                ),
+                "critical_owner_approved": critical_owner_approved,
                 "plan": plan.id,
                 "milestone": index,
             },
