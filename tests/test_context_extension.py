@@ -424,5 +424,54 @@ class AdapterTests(unittest.TestCase):
         ])
 
 
+    def test_console_routes_to_single_remote_manager(self):
+        state = (
+            [],
+            [{
+                "id": "plan123",
+                "target": "pi",
+                "status": "running",
+                "updated": 20,
+            }],
+            [],
+            [],
+        )
+        result, cli, _ = self.invoke(
+            ["console"],
+            context="",
+            state=state,
+        )
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with([
+            "remote-plan-console",
+            "pi",
+            "plan123",
+        ])
+
+    def test_console_target_routes_explicitly(self):
+        state = (
+            [],
+            [{
+                "id": "plan123",
+                "target": "pi",
+                "status": "awaiting_deviation",
+                "updated": 20,
+            }],
+            [],
+            [],
+        )
+        result, cli, _ = self.invoke(
+            ["console", "--target", "pi"],
+            context="",
+            state=state,
+        )
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with([
+            "remote-plan-console",
+            "pi",
+            "plan123",
+        ])
+
+
 if __name__ == "__main__":
     unittest.main()
