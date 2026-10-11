@@ -1113,11 +1113,32 @@ class Coordinator:
                         and not str(
                             (item.get("context") or {}).get("recovery_plan_id", "")
                         ).strip()
+                        and float(
+                            (item.get("context") or {}).get(
+                                "recovery_plan_retry_after", 0
+                            ) or 0
+                        ) <= time.time()
+                        and float(
+                            (item.get("context") or {}).get(
+                                "recovery_plan_retry_after", 0
+                            ) or 0
+                        ) <= time.time()
                     ), None)
                     if failed:
                         try:
                             self._prepare_remote_recovery_plan(failed)
                         except Exception as exc:
+                            failed_context = dict(failed.get("context", {}))
+                            attempts = int(
+                                failed_context.get("recovery_plan_attempts", 0)
+                            ) + 1
+                            failed_context["recovery_plan_attempts"] = attempts
+                            failed_context["recovery_plan_retry_after"] = (
+                                time.time() + min(300, 30 * attempts)
+                            )
+                            self.remote_store.update_plan(
+                                failed["id"], context=failed_context
+                            )
                             self.remote_store.event(
                                 failed["id"],
                                 "remote_recovery_plan_preparation_failed",
@@ -1340,6 +1361,17 @@ class Coordinator:
                         try:
                             self._prepare_local_recovery_plan(failed)
                         except Exception as exc:
+                            failed_context = dict(failed.get("context", {}))
+                            attempts = int(
+                                failed_context.get("recovery_plan_attempts", 0)
+                            ) + 1
+                            failed_context["recovery_plan_attempts"] = attempts
+                            failed_context["recovery_plan_retry_after"] = (
+                                time.time() + min(300, 30 * attempts)
+                            )
+                            self.store.update_plan(
+                                failed["id"], context=failed_context
+                            )
                             self.store.event(
                                 failed["id"],
                                 "recovery_plan_preparation_failed",
