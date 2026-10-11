@@ -172,6 +172,7 @@ Create the smallest practical plan. Do not perform actions. Return JSON only:
     "allow_sudo": false,
     "allow_package_install": false,
     "allow_network": false,
+    "allow_remote_admin": false,
     "max_actions": 30,
     "max_file_writes": 8,
     "max_attempts_per_milestone": 3,
@@ -180,15 +181,22 @@ Create the smallest practical plan. Do not perform actions. Return JSON only:
 }}
 
 Supported execution actions later are read_file, write_file, ensure_dir,
-package_install, service, and check. Service mutations are limited to start,
-restart, enable, and enable_now. Checks include systemctl_is_active, http_get,
-http_head, nginx_test, journal_tail, listen_sockets, command_exists, and
-path_exists.
+package_install, service, check, and remote_exec. Service mutations are limited
+to start, restart, enable, and enable_now. Checks include systemctl_is_active,
+http_get, http_head, nginx_test, journal_tail, listen_sockets, command_exists,
+and path_exists.
 
-Keep permissions narrow. Sudo, package installation, public network access,
-and write paths must be visible in the contract whenever required. Do not
-include SSH configuration changes, disk partitioning, firewall resets, user
-credential changes, or secret values in the plan."""
+remote_exec is a high-trust SSH-only capability. When allow_remote_admin is
+true it may run an arbitrary command on this named SSH target, optionally
+through non-interactive sudo. It never grants command execution on the desktop.
+Use it when the owner's goal explicitly asks for hands-off/full remote
+administration or when typed actions would force unnecessary manual steps.
+Its commands are not constrained by the typed path/package/service allowlists,
+so make this authority obvious in risks and keep commands on-task.
+
+Keep ordinary typed permissions narrow. Sudo, package installation, public
+network access, remote-admin authority, and write paths must be visible in the
+contract whenever required. Never include secret values in the plan."""
 
 
 def _admin_reconcile_prompt(
@@ -211,10 +219,15 @@ Inspection:
 {inspection[:20000]}
 
 Preserve the technical plan when sound, but remove speculative paths, packages,
-services, domains, and capabilities. Backups must remain required. Do not
-authorize SSH daemon changes, credential changes, firewall resets, disk
-partitioning, unrelated cleanup, or destructive work. The owner will review
-every permission in the returned budget."""
+services, domains, and capabilities. Backups must remain required where
+practical. If the owner explicitly requested hands-off administration, full
+control of the SSH target, broad cleanup, or rebuilding services in place,
+allow_remote_admin=true is permitted and should prevent avoidable manual
+handoffs. It grants arbitrary commands only on the named SSH target and never
+on the desktop. Keep destructive actions tied directly to the stated goal,
+preserve SSH reachability until replacement access is verified, and never
+request or embed secret values. The owner will review the resulting authority
+before execution."""
 
 
 def _agreement_prompt(plan: RemotePlan) -> str:
@@ -381,16 +394,22 @@ Return JSON only:
     {{"op": "ensure_dir", "path": "/approved/path", "mode": "0755"}},
     {{"op": "package_install", "packages": ["approved-package"]}},
     {{"op": "service", "service": "approved.service", "action": "restart"}},
-    {{"op": "check", "check": "systemctl_is_active", "service": "approved.service"}}
+    {{"op": "check", "check": "systemctl_is_active", "service": "approved.service"}},
+    {{"op": "remote_exec", "command": "apt-get autoremove -y", "as_root": true, "timeout": 900}}
   ],
   "summary": "what these actions accomplish",
   "expected_result": "what should be true afterward"
 }}
 
-Use only the actions actually needed for this milestone. Do not include an
-action shape that is not supported. Never include secret tokens or passwords.
-If the approved contract is insufficient, propose the minimum required action
-anyway so ctx-agent can turn it into an owner-visible deviation request."""
+Use only the actions actually needed for this milestone. Prefer typed actions
+when they are sufficient. If allow_remote_admin is true, remote_exec may be
+used for arbitrary maintenance on the SSH target, including package removal,
+filesystem cleanup, repository management, migrations, and other work not
+expressible by typed actions. Set as_root=true only when root is needed. The
+remote command runs on the SSH target, not on the desktop. Never include secret
+tokens or passwords. If the approved contract is insufficient, propose the
+minimum required action anyway so ctx-agent can turn it into an owner-visible
+deviation request."""
 
 
 def _admin_action_review(
@@ -522,6 +541,11 @@ def _amend_budget_for_action(plan: RemotePlan, action: dict) -> RemotePlan:
             budget["allowed_services"].append(service)
         if action.get("action") != "status":
             budget["allow_sudo"] = True
+    elif op == "remote_exec":
+        budget["allow_remote_admin"] = True
+        if action.get("as_root"):
+            budget["allow_sudo"] = True
+        budget["allow_network"] = True
     elif op == "check":
         check = action.get("check")
         if check in ("systemctl_is_active", "journal_tail"):
