@@ -118,7 +118,7 @@ def _wake_internal_scope(kind: str, scope: str, pid: str = "") -> dict | None:
         ),
     )
     if item.get("status") not in ("failed_internal", "cancelled"):
-        return item
+        return None
     try:
         op = (
             "remote_plan_retry_internal"
