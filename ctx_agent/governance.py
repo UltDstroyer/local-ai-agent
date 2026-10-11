@@ -47,6 +47,42 @@ _INTERNAL_DECISION_MARKERS = (
 )
 
 
+_LOCAL_SECRET_INPUT_TERMS = (
+    "password",
+    "passphrase",
+    "credential",
+    "api key",
+    "api token",
+    "access token",
+    "secret",
+    "one-time code",
+    "verification code",
+    "2fa",
+    "otp",
+)
+
+_LOCAL_SECRET_INPUT_VERBS = (
+    "provide",
+    "enter",
+    "type",
+    "paste",
+    "send",
+    "share",
+    "give",
+    "supply",
+)
+
+
+def _looks_like_local_secret_input(text: object) -> bool:
+    if not isinstance(text, str):
+        return False
+    value = " ".join(text.lower().split())
+    return (
+        any(term in value for term in _LOCAL_SECRET_INPUT_TERMS)
+        and any(verb in value for verb in _LOCAL_SECRET_INPUT_VERBS)
+    )
+
+
 def owner_decision_key(request: object) -> str:
     """Stable identity for one boss question, independent of explanatory prose."""
     if not isinstance(request, dict):
@@ -171,4 +207,7 @@ def valid_local_owner_request(request: object) -> bool:
         )
 
     boss_request = _plain_request(request)
-    return not owner_request_is_internal(boss_request)
+    return (
+        not owner_request_is_internal(boss_request)
+        and not _looks_like_local_secret_input(boss_request)
+    )
