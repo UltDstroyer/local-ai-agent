@@ -149,26 +149,15 @@ def _call_with_progress(path, payload, progress_payload, timeout):
     return result["value"]
 
 
-def _print_live_deviation(deviation):
-    request = deviation.get("request") or {}
+def _print_live_deviation(deviation, brief):
     print("", file=sys.stderr)
-    print("[ctx-agent] DEVIATION REQUIRES OWNER INPUT", file=sys.stderr, flush=True)
-    print("  id:", deviation.get("id", ""), file=sys.stderr)
-    print("  reason:", deviation.get("reason", ""), file=sys.stderr)
-    if request.get("risk"):
-        print("  risk:", request["risk"], file=sys.stderr)
-    manager = request.get("manager_review") or {}
-    if manager.get("reason"):
-        print("  manager:", manager["reason"], file=sys.stderr)
-    if request.get("error"):
-        print("  error:", request["error"], file=sys.stderr)
-    if request.get("suggested_action"):
-        print("  recommendation:", request["suggested_action"], file=sys.stderr)
+    print("[Qwen manager] I need your decision", file=sys.stderr, flush=True)
+    print("  summary:", brief.get("summary", ""), file=sys.stderr)
+    print("  risk:", brief.get("risk", "medium"), file=sys.stderr)
+    print("  recommendation:", brief.get("recommendation", ""), file=sys.stderr)
+    print("  decision:", brief.get("decision", ""), file=sys.stderr)
     print(
-        "  action: ctx agent "
-        + ("remote-deviation" if deviation.get("target") else "deviation")
-        + " approve|reject "
-        + str(deviation.get("id", "")),
+        "  reply: ctx a a  (approve)  |  ctx a x  (reject)",
         file=sys.stderr,
         flush=True,
     )
@@ -214,7 +203,21 @@ def _follow_approved_plan(path, plan, *, remote):
                 None,
             )
             if pending:
-                _print_live_deviation(pending)
+                detail = call(
+                    path,
+                    {
+                        "op": (
+                            "remote_deviation_show"
+                            if remote else "deviation_show"
+                        ),
+                        "id": pending["id"],
+                    },
+                    timeout=180,
+                )
+                _print_live_deviation(
+                    detail.get("deviation", pending),
+                    detail.get("brief", {}),
+                )
             return
         if phase in (
             "completed",
@@ -382,6 +385,10 @@ def main(argv=None):
 
         if args.action in ("plan-progress", "remote-plan-progress"):
             _print_progress_report(result["progress"])
+        elif args.action in ("deviation-show", "remote-deviation-show"):
+            deviation = result["deviation"]
+            brief = result.get("brief", {})
+            _print_live_deviation(deviation, brief)
         elif args.action in ("diff", "plan-diff"):
             print(result["diff"])
             print("Changed:", ", ".join(result["changed"]))
