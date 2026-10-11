@@ -444,6 +444,74 @@ class RemoteStoreTests(unittest.TestCase):
             self.assertFalse(store.delete_target("pi"))
 
 
+    def test_remote_deviation_requires_running_plan(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = RemoteStore(Path(td) / "remote.sqlite3")
+            plan = RemotePlan.from_dict({
+                "goal": "demo",
+                "milestones": ["one"],
+                "verification": ["done"],
+                "risks": [],
+                "assumptions": [],
+                "remote_budget": budget(),
+            }, "pi")
+            store.create_plan("pi", plan.goal, plan.to_dict())
+            with self.assertRaisesRegex(ValueError, "no longer running"):
+                store.create_deviation(
+                    plan.id,
+                    "pi",
+                    "should not happen",
+                    {
+                        "type": "manager_escalation",
+                        "boss_request": "Allow a real choice.",
+                    },
+                )
+            self.assertEqual(
+                store.get_plan(plan.id)["status"],
+                "awaiting_approval",
+            )
+
+    def test_cancelled_remote_plan_cannot_be_resurrected_by_generic_update(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = RemoteStore(Path(td) / "remote.sqlite3")
+            plan = RemotePlan.from_dict({
+                "goal": "demo",
+                "milestones": ["one"],
+                "verification": ["done"],
+                "risks": [],
+                "assumptions": [],
+                "remote_budget": budget(),
+            }, "pi")
+            store.create_plan("pi", plan.goal, plan.to_dict())
+            self.assertTrue(store.approve_plan(plan.id))
+            self.assertIsNotNone(store.next_plan())
+            self.assertTrue(store.cancel_plan(plan.id))
+            with self.assertRaisesRegex(ValueError, "cannot be resurrected"):
+                store.update_plan(plan.id, status="approved")
+            self.assertEqual(store.get_plan(plan.id)["status"], "cancelled")
+
+    def test_runtime_service_approval_does_not_authorize_persistent_enablement(self):
+        approved = {"service:cloudflared:runtime"}
+        self.assertTrue(_dependency_preapproved({
+            "op": "service",
+            "service": "cloudflared.service",
+            "action": "restart",
+        }, approved))
+        self.assertFalse(_dependency_preapproved({
+            "op": "service",
+            "service": "cloudflared.service",
+            "action": "enable_now",
+        }, approved))
+
+    def test_persistent_service_approval_covers_runtime_control(self):
+        approved = {"service:cloudflared:persistent"}
+        self.assertTrue(_dependency_preapproved({
+            "op": "service",
+            "service": "cloudflared.service",
+            "action": "start",
+        }, approved))
+
+
 class SSHBridgeTests(unittest.TestCase):
     def test_ssh_forces_batch_mode_and_strict_host_keys(self):
         target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
@@ -981,6 +1049,8 @@ class BossManagerEmployeeInvariantTests(unittest.TestCase):
                 "remote_budget": budget(),
             }, "pi")
             store.create_plan("pi", plan.goal, plan.to_dict())
+            self.assertTrue(store.approve_plan(plan.id))
+            self.assertEqual(store.next_plan()["status"], "running")
             first = store.create_deviation(
                 plan.id, "pi", "first", {"type": "manager_escalation"}
             )
@@ -1044,6 +1114,8 @@ class BossManagerEmployeeInvariantTests(unittest.TestCase):
                 ),
             }, "pi")
             store.create_plan("pi", plan.goal, plan.to_dict())
+            self.assertTrue(store.approve_plan(plan.id))
+            self.assertEqual(store.next_plan()["status"], "running")
             action = {
                 "op": "service",
                 "service": "cloudflared.service",
@@ -1072,7 +1144,7 @@ class BossManagerEmployeeInvariantTests(unittest.TestCase):
                 [],
             )
             self.assertIn(
-                "service:cloudflared",
+                "service:cloudflared:runtime",
                 approved["context"]["approved_dependencies"],
             )
 
@@ -1094,6 +1166,8 @@ class BossManagerEmployeeInvariantTests(unittest.TestCase):
                 ),
             }, "pi")
             store.create_plan("pi", plan.goal, plan.to_dict())
+            self.assertTrue(store.approve_plan(plan.id))
+            self.assertEqual(store.next_plan()["status"], "running")
             action = {
                 "op": "package_install",
                 "packages": ["cloudflared"],
