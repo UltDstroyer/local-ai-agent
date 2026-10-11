@@ -52,8 +52,18 @@ TOOLS = [
 
 
 def ask(settings: Settings, messages: list[dict], mode: str = 'quiet',
-        tools: list[dict] | None = None, json_mode: bool = False) -> dict:
+        tools: list[dict] | None = None, json_mode: bool = False,
+        num_predict: int | None = None, num_ctx: int | None = None) -> dict:
     from .resources import ollama_options
+    options = ollama_options(mode)
+    if num_predict is not None:
+        if type(num_predict) is not int or not 128 <= num_predict <= 8192:
+            raise ValueError("num_predict override must be between 128 and 8192")
+        options["num_predict"] = num_predict
+    if num_ctx is not None:
+        if type(num_ctx) is not int or not 2048 <= num_ctx <= 32768:
+            raise ValueError("num_ctx override must be between 2048 and 32768")
+        options["num_ctx"] = num_ctx
     payload = {"model": settings.model, "stream": False,
                        "messages": messages,
                        # Fast interactive modes skip Qwen's explicit thinking
@@ -62,7 +72,7 @@ def ask(settings: Settings, messages: list[dict], mode: str = 'quiet',
                        # Avoid repeatedly reloading the model during a work
                        # session while still allowing VRAM to be reclaimed.
                        "keep_alive": "5m",
-                       "options": ollama_options(mode)}
+                       "options": options}
     selected_tools = TOOLS if tools is None else tools
     if selected_tools:
         payload["tools"] = selected_tools

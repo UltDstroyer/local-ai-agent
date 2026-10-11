@@ -57,6 +57,44 @@ def _json_object(text: str) -> dict:
     raise ContractError("model did not return a JSON object")
 
 
+def _ask_json_object(
+    settings,
+    messages: list[dict],
+    mode: str,
+    *,
+    num_predict: int = 3072,
+    num_ctx: int = 8192,
+) -> dict:
+    """Ask Ollama for a structured object, retrying once on malformed/truncated JSON."""
+    last_error = None
+    for attempt in range(2):
+        attempt_messages = [dict(message) for message in messages]
+        if attempt:
+            if attempt_messages and attempt_messages[0].get("role") == "system":
+                attempt_messages[0]["content"] = (
+                    str(attempt_messages[0].get("content", ""))
+                    + " The previous generation was malformed or truncated. "
+                    "Return a complete, concise JSON object with every required field."
+                )
+        response = ask(
+            settings,
+            attempt_messages,
+            "balanced" if mode == "quiet" else mode,
+            tools=[],
+            json_mode=True,
+            num_predict=num_predict,
+            num_ctx=num_ctx,
+        )
+        try:
+            return _json_object(str(response.get("content", "")))
+        except ContractError as exc:
+            last_error = exc
+    raise ContractError(
+        "model failed to return complete valid JSON after one retry: "
+        + str(last_error)
+    )
+
+
 def _inventory_summary(root: Path) -> list[str]:
     return sorted(inventory(root))[:500]
 
@@ -72,7 +110,7 @@ Project files:
 {json.dumps(files)}
 
 Owner notes:
-{json.dumps(notes)[:5000]}
+{json.dumps(notes)[:3000]}
 
 Design the smallest practical plan that satisfies the goal. Minimize touched
 files and lines. Include every file/pattern that may need modification, but do
@@ -113,10 +151,10 @@ Owner goal:
 {goal}
 
 Codex proposal:
-{json.dumps(codex_plan)[:14000]}
+{json.dumps(codex_plan)[:10000]}
 
 Project inventory:
-{json.dumps(files)[:10000]}
+{json.dumps(files)[:6000]}
 
 Owner notes:
 {json.dumps(notes)[:5000]}
@@ -205,7 +243,7 @@ def create_negotiated_plan(
     if progress:
         progress(2, candidate.get("milestones", []))
 
-    admin_message = ask(
+    admin = _ask_json_object(
         settings,
         [
             {
@@ -220,11 +258,10 @@ def create_negotiated_plan(
                 "content": _admin_reconcile_prompt(goal, candidate, files, notes),
             },
         ],
-        "balanced" if mode == "quiet" else mode,
-        tools=[],
-        json_mode=True,
+        mode,
+        num_predict=3072,
+        num_ctx=8192,
     )
-    admin = _json_object(str(admin_message.get("content", "")))
     plan = Plan.from_dict(admin, project)
     if progress:
         progress(3, list(plan.milestones))
@@ -260,7 +297,7 @@ def create_negotiated_plan(
                 "Codex and the local administrator could not agree on a minimal plan: "
                 + "; ".join(str(x) for x in concerns)[:3000]
             )
-        final_admin_message = ask(
+        final_admin = _ask_json_object(
             settings,
             [
                 {
@@ -277,12 +314,9 @@ def create_negotiated_plan(
                     ),
                 },
             ],
-            "balanced" if mode == "quiet" else mode,
-            tools=[],
-            json_mode=True,
-        )
-        final_admin = _json_object(
-            str(final_admin_message.get("content", ""))
+            mode,
+            num_predict=3072,
+            num_ctx=8192,
         )
         plan = Plan.from_dict(final_admin, project, plan.id)
 
