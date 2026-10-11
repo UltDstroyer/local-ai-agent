@@ -24,6 +24,7 @@ from ctx_agent.remote_orchestrator import (
     _dependency_request_from_checkin,
     _human_input_error,
     _is_remote_action_format_error,
+    _manager_dependency_review,
     _manager_scope_review,
     _remote_actions_error,
     _remote_context_dir,
@@ -35,6 +36,7 @@ from ctx_agent.remote_store import RemoteStore
 from ctx_agent.ssh_bridge import (
     SSHBridge,
     SSHBridgeError,
+    _redact_result_outputs,
     _resolve_action_inputs,
     _ssh_base,
 )
@@ -891,6 +893,99 @@ class RemoteWorkerEscalationBoundaryTests(unittest.TestCase):
             source,
         )
         self.assertIn("remote_internal_format_recovery", source)
+
+
+class BossManagerEmployeeInvariantTests(unittest.TestCase):
+    def test_dependency_review_failure_stays_internal(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Expose Jellyfin",
+            "milestones": ["Configure tunnel"],
+            "verification": ["HTTPS works"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(),
+        }, "pi")
+        with patch(
+            "ctx_agent.remote_orchestrator._ask_json_object",
+            side_effect=RuntimeError("qwen unavailable"),
+        ):
+            review = _manager_dependency_review(
+                SimpleNamespace(),
+                plan,
+                "Configure tunnel",
+                {"op": "package_install", "packages": ["cloudflared"]},
+                {"summary": "Need tunnel client"},
+                "cloudflared: command not found",
+                "balanced",
+            )
+        self.assertTrue(review["internal_error"])
+        self.assertFalse(review["needed"])
+        self.assertIn("Retry", review["guidance"])
+
+    def test_structured_service_dependency_preserves_exact_action(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Expose Jellyfin",
+            "milestones": ["Validate tunnel"],
+            "verification": ["Tunnel active"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(),
+        }, "pi")
+        request = _dependency_request_from_checkin(
+            plan,
+            {
+                "kind": "service",
+                "name": "cloudflared.service",
+                "action": "restart",
+                "reason": "The configured tunnel daemon must reload its config.",
+            },
+        )
+        self.assertIsNotNone(request)
+        self.assertEqual(
+            request["proposed_action"]["action"],
+            "restart",
+        )
+        self.assertIn("restart", request["boss_request"])
+
+    def test_secret_is_redacted_from_ssh_result(self):
+        result = {
+            "ok": False,
+            "output": "token=super-secret failed",
+            "stderr": "super-secret rejected",
+        }
+        redacted = _redact_result_outputs(
+            result, {"cloudflare_token": "super-secret"}
+        )
+        self.assertNotIn("super-secret", redacted["output"])
+        self.assertNotIn("super-secret", redacted["stderr"])
+        self.assertIn("[REDACTED]", redacted["output"])
+
+    def test_remote_store_suppresses_duplicate_pending_deviations(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = RemoteStore(Path(td) / "remote.sqlite3")
+            target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
+            store.put_target(target.to_dict())
+            plan = RemotePlan.from_dict({
+                "goal": "Configure tunnel",
+                "milestones": ["Configure"],
+                "verification": ["Works"],
+                "risks": [],
+                "assumptions": [],
+                "remote_budget": budget(),
+            }, "pi")
+            store.create_plan("pi", plan.goal, plan.to_dict())
+            first = store.create_deviation(
+                plan.id, "pi", "first", {"type": "manager_escalation"}
+            )
+            second = store.create_deviation(
+                plan.id, "pi", "second", {"type": "manager_escalation"}
+            )
+            self.assertEqual(first, second)
+            pending = [
+                item for item in store.list_deviations(plan=plan.id)
+                if item["status"] == "pending"
+            ]
+            self.assertEqual(len(pending), 1)
 
 
 if __name__ == "__main__":
