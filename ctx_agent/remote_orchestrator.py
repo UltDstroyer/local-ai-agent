@@ -2920,7 +2920,10 @@ def run_remote_plan_step(
                     "remote_codex_overrode_manager_replan",
                     context["manager_strategy"][:1800],
                 )
-            elif checkin.get("owner_needed") is True:
+            elif (
+                replan.get("owner_needed") is True
+                and checkin.get("owner_needed") is True
+            ):
                 remote_store.create_deviation(
                     plan.id,
                     plan.target,
@@ -3050,18 +3053,27 @@ def run_remote_plan_step(
             "Codex proposed a stronger technical approach during manager check-in."
         )
     elif checkin.get("owner_needed") is True:
-        review["owner_needed"] = True
-        if checkin.get("owner_request"):
-            review["owner_request"] = checkin["owner_request"]
-        review["risk"] = checkin.get("risk", review.get("risk", "medium"))
+        if review.get("owner_needed") is True:
+            if checkin.get("owner_request"):
+                review["owner_request"] = checkin["owner_request"]
+            review["risk"] = checkin.get("risk", review.get("risk", "medium"))
+        else:
+            review["owner_needed"] = False
+            review["owner_request"] = ""
+            review["state"] = "continue"
+            review["guidance"] = (
+                "Codex believes a boss decision may be required, but Qwen has not "
+                "independently confirmed it. Reassess together and escalate only "
+                "if both agree on one concrete owner decision."
+            )
     elif review.get("owner_needed") is True:
         review["owner_needed"] = False
         review["owner_request"] = ""
         review["state"] = "continue"
         review["guidance"] = (
-            "Codex did not confirm that an owner decision is required. Continue "
-            "technical investigation internally and only escalate a concrete need "
-            "that both manager and engineer agree on."
+            "Qwen believes a boss decision may be required, but Codex did not "
+            "confirm it. Continue technical investigation internally and only "
+            "escalate a concrete need that both manager and engineer agree on."
         )
     context["next_guidance"] = str(review.get("guidance", ""))[:3000]
     context = _append_history(
