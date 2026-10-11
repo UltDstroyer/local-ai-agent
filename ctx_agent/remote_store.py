@@ -292,6 +292,13 @@ class RemoteStore:
         did = uuid.uuid4().hex[:12]
         now = time.time()
         with self.lock, self.db:
+            existing = self.db.execute(
+                "SELECT id FROM remote_deviations WHERE plan=? AND status='pending' "
+                "ORDER BY created DESC LIMIT 1",
+                (plan,),
+            ).fetchone()
+            if existing:
+                return existing["id"]
             self.db.execute(
                 "INSERT INTO remote_deviations("
                 "id,plan,target,status,reason,request_json,created,updated"
