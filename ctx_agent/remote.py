@@ -353,29 +353,36 @@ def validate_remote_action(action: object, budget: RemoteBudget) -> dict:
 
     elif op == "package_install":
         packages = action.get("packages")
-        if (
-            not budget.allow_package_install
-            or not budget.allow_sudo
-            or not isinstance(packages, list)
-            or not packages
-            or len(packages) > 20
-        ):
+        if not isinstance(packages, list) or not packages or len(packages) > 20:
+            raise RemoteContractError(
+                "invalid package_install format: packages must be a non-empty list of at most 20 names"
+            )
+        for package in packages:
+            if not isinstance(package, str) or not PACKAGE_RE.fullmatch(package):
+                raise RemoteContractError(
+                    f"invalid package_install format: bad package name {package!r}"
+                )
+        if not budget.allow_package_install or not budget.allow_sudo:
             raise RemoteContractError("package installation is not approved")
         for package in packages:
-            if (
-                not isinstance(package, str)
-                or package not in budget.allowed_packages
-                or not PACKAGE_RE.fullmatch(package)
-            ):
-                raise RemoteContractError(f"package outside remote contract: {package!r}")
+            if package not in budget.allowed_packages:
+                raise RemoteContractError(
+                    f"package outside remote contract: {package!r}"
+                )
 
     elif op == "service":
         service = action.get("service", "")
         service_action = action.get("action", "")
+        if not isinstance(service, str) or not service.strip():
+            raise RemoteContractError(
+                "invalid service format: service must be a non-empty unit name"
+            )
+        if not isinstance(service_action, str) or service_action not in SERVICE_ACTIONS:
+            raise RemoteContractError(
+                "invalid service format: unsupported or missing service action"
+            )
         if not remote_service_allowed(service, budget.allowed_services):
             raise RemoteContractError(f"service outside remote contract: {service}")
-        if service_action not in SERVICE_ACTIONS:
-            raise RemoteContractError("unsupported service action")
         if service_action != "status" and not budget.allow_sudo:
             raise RemoteContractError("service mutation requires approved sudo capability")
 
