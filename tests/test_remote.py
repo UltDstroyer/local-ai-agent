@@ -20,6 +20,7 @@ from ctx_agent.remote_orchestrator import (
     _codex_manager_checkin_remote,
     _dependency_key,
     _dependency_owner_request,
+    _dependency_request_from_checkin,
     _human_input_error,
     _manager_scope_review,
     _remote_actions_error,
@@ -770,3 +771,30 @@ class ExecutionBudgetAutonomyTests(unittest.TestCase):
                 {},
                 requested_actions=200,
             )
+
+
+class MissingDependencyEscalationTests(unittest.TestCase):
+    def test_cloudflared_missing_becomes_install_approval(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Expose Jellyfin through Cloudflare",
+            "milestones": ["Validate Cloudflare Tunnel routing"],
+            "verification": ["External HTTPS works"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(),
+        }, "pi")
+        request = _dependency_request_from_checkin(
+            plan,
+            {
+                "kind": "package",
+                "name": "cloudflared",
+                "reason": (
+                    "The cloudflared binary is absent and is required to run "
+                    "the Cloudflare Tunnel."
+                ),
+            },
+        )
+        self.assertIsNotNone(request)
+        self.assertEqual(request["type"], "dependency_install")
+        self.assertIn("cloudflared", request["boss_request"])
+        self.assertIn("download and install", request["boss_request"])
