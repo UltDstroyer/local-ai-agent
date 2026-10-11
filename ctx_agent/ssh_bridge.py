@@ -58,6 +58,23 @@ def _ssh_base(target: RemoteTarget) -> list[str]:
     ]
 
 
+def _resolve_inputs(value, inputs: dict[str, str]):
+    if not isinstance(value, str):
+        return value
+    result = value
+    for key, supplied in inputs.items():
+        result = result.replace("{{input:" + key + "}}", supplied)
+    return result
+
+
+def _resolve_action_inputs(action: dict, inputs: dict[str, str]) -> dict:
+    resolved = dict(action)
+    for field in ("command", "content", "url", "path"):
+        if field in resolved and isinstance(resolved[field], str):
+            resolved[field] = _resolve_inputs(resolved[field], inputs)
+    return resolved
+
+
 def _run_script(
     target: RemoteTarget,
     script: str,
@@ -401,7 +418,16 @@ class SSHBridge:
         if op != "action":
             raise SSHBridgeError("unsupported SSH bridge operation")
 
-        action = validate_remote_action(request.get("action"), budget)
+        raw_action = request.get("action")
+        inputs = request.get("inputs") or {}
+        if not isinstance(inputs, dict) or any(
+            not isinstance(k, str) or not isinstance(v, str)
+            for k, v in inputs.items()
+        ):
+            raise SSHBridgeError("invalid input values")
+        action = validate_remote_action(
+            _resolve_action_inputs(raw_action, inputs), budget
+        )
         if action["op"] == "read_file":
             return _read_file(target, budget, action)
         if action["op"] == "write_file":
