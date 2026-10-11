@@ -747,6 +747,16 @@ class HumanInputBoundaryTests(unittest.TestCase):
         self.assertIn("multiple human values", _human_input_error(request))
 
 
+    def test_credential_path_is_not_human_input(self):
+        request = {
+            "key": "cloudflare_credentials_path",
+            "prompt": "Cloudflare Tunnel credential path",
+            "reason": "Needed to locate credentials on the Pi.",
+            "sensitive": False,
+        }
+        self.assertIn("system state", _human_input_error(request))
+
+
 class RemoteDependencyApprovalTests(unittest.TestCase):
     def test_cloudflared_install_is_owner_gated_even_when_budget_allows_it(self):
         plan = RemotePlan.from_dict({
