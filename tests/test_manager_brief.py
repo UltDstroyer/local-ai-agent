@@ -3,6 +3,7 @@
 import io
 import json
 import unittest
+from pathlib import Path
 from contextlib import redirect_stderr
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -113,3 +114,15 @@ class ConcreteManagerDecisionTests(unittest.TestCase):
         )
 
 
+
+
+class BossDecisionOutputTests(unittest.TestCase):
+    def test_cli_reports_approval_before_watcher(self):
+        text = (
+            Path(__file__).resolve().parents[1]
+            .joinpath("ctx_agent", "cli.py")
+            .read_text()
+        )
+        approved = text.index('print("[Qwen manager] approved"')
+        watcher = text.index("_follow_approved_plan(args.socket, plan, remote=remote)")
+        self.assertLess(approved, watcher)
