@@ -837,12 +837,51 @@ class Coordinator:
                                     str(failure.get("error", ""))[:1200],
                                 )
                         else:
-                            self.remote_store.create_deviation(
-                                row["id"],
-                                row["target"],
-                                "Remote autonomous step stopped: " + failure["type"],
-                                failure,
-                            )
+                            if failure["type"] == "credentials":
+                                request = {
+                                    "type": "human_access",
+                                    "reason": str(
+                                        failure.get("error", "")
+                                    )[:1800],
+                                    "boss_request": (
+                                        "Restore or authorize SSH key access to "
+                                        f"{row['target']} so I can continue."
+                                    ),
+                                    "risk": "medium",
+                                    "suggested_action": (
+                                        "Fix only the existing SSH authentication "
+                                        "for this target; do not broaden remote scope."
+                                    ),
+                                }
+                                self.remote_store.create_deviation(
+                                    row["id"],
+                                    row["target"],
+                                    "Qwen needs restored SSH access to the target",
+                                    request,
+                                )
+                            else:
+                                context = dict(current.get("context", {}))
+                                context["next_guidance"] = (
+                                    "Qwen manager correction: an unclassified internal "
+                                    "remote failure occurred. Diagnose it with Codex "
+                                    "before involving the owner. "
+                                    + str(failure.get("error", ""))[:1800]
+                                )
+                                self.remote_store.update_plan(
+                                    row["id"],
+                                    status="cancelled",
+                                    context=context,
+                                    result=(
+                                        "The remote worker stopped on an unclassified "
+                                        "internal failure without creating an owner "
+                                        "decision."
+                                    ),
+                                )
+                                self.remote_store.event(
+                                    row["id"],
+                                    "remote_unclassified_internal_failure",
+                                    str(failure.get("error", ""))[:1200],
+                                )
             except Exception:
                 self.shutdown.wait(1)
 
@@ -873,6 +912,7 @@ class Coordinator:
                             "codex_worker",
                             "timeout",
                             "workspace_tool",
+                            "policy_scope",
                         ):
                             context = dict(current.get("context", {}))
                             recoveries = int(
@@ -915,11 +955,26 @@ class Coordinator:
                                     str(failure.get("error", ""))[:1200],
                                 )
                         else:
-                            self.store.create_deviation(
+                            context = dict(current.get("context", {}))
+                            context["next_guidance"] = (
+                                "Qwen manager correction: an unclassified internal "
+                                "project failure occurred. Diagnose it with Codex "
+                                "before involving the owner. "
+                                + str(failure.get("error", ""))[:1800]
+                            )
+                            self.store.update_plan(
                                 row["id"],
-                                row["project"],
-                                "Autonomous step stopped: " + failure["type"],
-                                failure,
+                                status="cancelled",
+                                context=context,
+                                result=(
+                                    "The project worker stopped on an unclassified "
+                                    "internal failure without creating an owner decision."
+                                ),
+                            )
+                            self.store.event(
+                                row["id"],
+                                "project_unclassified_internal_failure",
+                                str(failure.get("error", ""))[:1200],
                             )
             except Exception:
                 self.shutdown.wait(1)
