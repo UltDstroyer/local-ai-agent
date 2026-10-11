@@ -530,6 +530,12 @@ Return JSON only:
         value = _json_object(str(response.get("content", "")))
         if value.get("state") not in ("complete", "continue", "blocked"):
             raise ValueError("bad completion state")
+        value["owner_needed"] = value.get("owner_needed") is True
+        value["owner_request"] = str(value.get("owner_request", "")).strip()[:500]
+        risk = str(value.get("risk", "medium")).lower()
+        value["risk"] = risk if risk in ("low", "medium", "high") else "medium"
+        if value["owner_needed"] and not value["owner_request"]:
+            raise ValueError("owner_needed requires one concrete owner_request")
         return value
     except Exception:
         return {
@@ -537,6 +543,9 @@ Return JSON only:
             "guidance": "Inspect the latest results and verify the milestone again.",
             "context_note": "",
             "reason": "administrator completion review was inconclusive",
+            "owner_needed": False,
+            "owner_request": "",
+            "risk": "medium",
         }
 
 
@@ -1150,22 +1159,38 @@ def run_remote_plan_step(settings, remote_store, row: dict, mode: str):
         return
 
     attempts = int(row["attempts"]) + 1
-    if (
-        review["state"] == "blocked"
-        or attempts >= plan.budget.max_attempts_per_milestone
-    ):
+    if review.get("owner_needed") is True:
         remote_store.create_deviation(
             plan.id,
             plan.target,
-            "remote milestone needs owner attention",
+            "Qwen requests one owner decision",
+            {
+                "type": "manager_escalation",
+                "milestone": plan.milestones[index],
+                "reason": review.get("reason", ""),
+                "boss_request": review.get("owner_request", ""),
+                "risk": review.get("risk", "medium"),
+                "suggested_action": review.get("guidance", ""),
+            },
+        )
+    elif attempts >= plan.budget.max_attempts_per_milestone:
+        remote_store.create_deviation(
+            plan.id,
+            plan.target,
+            "Qwen exhausted the recovery budget",
             {
                 "type": "stalled",
                 "milestone": plan.milestones[index],
                 "reason": review.get("reason", ""),
+                "boss_request": (
+                    "Allow Qwen and Codex another bounded recovery cycle for this milestone."
+                ),
+                "risk": "low",
                 "suggested_action": review.get("guidance", ""),
             },
         )
     else:
+        context["next_guidance"] = str(review.get("guidance", ""))[:3000]
         remote_store.update_plan(
             plan.id,
             status="approved",
