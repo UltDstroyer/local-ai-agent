@@ -310,3 +310,25 @@ units and currently running services. This gives Codex and Qwen current
 machine-specific context instead of relying only on a static list of common
 services. Newly discovered resources still pass through deterministic scope
 validation before mutation.
+
+
+## Boss-facing communication boundary
+
+The human owner is treated as the boss, Qwen as the manager, and Codex as the
+employee. Codex and low-level tools never speak directly to the boss in normal
+operation.
+
+When a deviation reaches the owner, Qwen receives the full internal deviation
+payload and rewrites it into a short executive brief containing only:
+
+- what is blocked;
+- the practical risk;
+- Qwen's recommendation;
+- the decision Qwen needs from the boss.
+
+Raw Codex output, validator details, stack traces, SSH/tool diagnostics, and
+internal remediation instructions remain in the audit store for Qwen and
+debugging. They are not printed in the ordinary boss-facing terminal flow.
+
+If Qwen cannot produce a reliable summary, the CLI fails closed with a generic
+manager message rather than leaking raw employee/tool output.
