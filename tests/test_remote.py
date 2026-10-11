@@ -22,6 +22,7 @@ from ctx_agent.remote_orchestrator import (
     _dependency_owner_request,
     _dependency_request_from_checkin,
     _human_input_error,
+    _is_remote_action_format_error,
     _manager_scope_review,
     _remote_actions_error,
     _remote_context_dir,
@@ -798,3 +799,45 @@ class MissingDependencyEscalationTests(unittest.TestCase):
         self.assertEqual(request["type"], "dependency_install")
         self.assertIn("cloudflared", request["boss_request"])
         self.assertIn("download and install", request["boss_request"])
+
+
+class TypedActionFormatRecoveryTests(unittest.TestCase):
+    def test_bad_package_shape_is_internal_format_error(self):
+        b = RemoteBudget.from_dict(budget())
+        with self.assertRaisesRegex(
+            RemoteContractError,
+            "invalid package_install format",
+        ):
+            validate_remote_action({
+                "op": "package_install",
+                "packages": "cloudflared",
+            }, b)
+        self.assertTrue(_is_remote_action_format_error(
+            "invalid package_install format: packages must be a non-empty list"
+        ))
+
+    def test_bad_service_shape_is_internal_format_error(self):
+        b = RemoteBudget.from_dict(budget())
+        with self.assertRaisesRegex(
+            RemoteContractError,
+            "invalid service format",
+        ):
+            validate_remote_action({
+                "op": "service",
+                "service": "",
+                "action": "enable_now",
+            }, b)
+        self.assertTrue(_is_remote_action_format_error(
+            "invalid service format: service must be a non-empty unit name"
+        ))
+
+    def test_valid_new_dependency_remains_owner_gated(self):
+        b = RemoteBudget.from_dict(budget())
+        action = validate_remote_action({
+            "op": "package_install",
+            "packages": ["cloudflared"],
+        }, b)
+        self.assertEqual(action["packages"], ["cloudflared"])
+        self.assertFalse(_is_remote_action_format_error(
+            "package installation is not approved"
+        ))
