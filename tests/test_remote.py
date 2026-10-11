@@ -14,6 +14,7 @@ from ctx_agent.remote import (
 )
 from ctx_agent.remote_orchestrator import (
     _ask_json_object,
+    _auto_expand_execution_budget,
     _json_object,
     _completion_review,
     _codex_manager_checkin_remote,
@@ -709,3 +710,63 @@ class CodexManagerCollaborationTests(unittest.TestCase):
             value["owner_request"],
             "Allow installation of cloudflared.",
         )
+
+
+class ExecutionBudgetAutonomyTests(unittest.TestCase):
+    def test_qwen_can_raise_action_counter_without_owner(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Finish server setup",
+            "milestones": ["Validate routing"],
+            "verification": ["Routing works"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(max_actions=30),
+        }, "pi")
+        class Store:
+            def __init__(self):
+                self.updated = None
+                self.events = []
+            def update_plan(self, pid, **kwargs):
+                self.updated = (pid, kwargs)
+            def event(self, pid, event, detail=""):
+                self.events.append((pid, event, detail))
+        store = Store()
+        context = {}
+        updated, new_context = _auto_expand_execution_budget(
+            store,
+            plan,
+            context,
+            requested_actions=31,
+        )
+        self.assertEqual(updated.budget.max_actions, 31)
+        self.assertEqual(
+            new_context["original_execution_budget"]["max_actions"], 30
+        )
+        self.assertTrue(any(
+            event == "remote_execution_budget_expanded_by_manager"
+            for _, event, _ in store.events
+        ))
+
+    def test_qwen_budget_autonomy_is_bounded(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Finish server setup",
+            "milestones": ["Validate routing"],
+            "verification": ["Routing works"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(max_actions=30),
+        }, "pi")
+        class Store:
+            def update_plan(self, *args, **kwargs):
+                pass
+            def event(self, *args, **kwargs):
+                pass
+        with self.assertRaisesRegex(
+            Exception, "above manager cap"
+        ):
+            _auto_expand_execution_budget(
+                Store(),
+                plan,
+                {},
+                requested_actions=200,
+            )
