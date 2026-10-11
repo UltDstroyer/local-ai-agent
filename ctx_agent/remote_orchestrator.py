@@ -609,6 +609,56 @@ def _append_history(context: dict, entry: dict) -> dict:
     return value
 
 
+def _manager_replan_remote(
+    settings,
+    plan: RemotePlan,
+    row: dict,
+    inspection: str,
+    failure: str,
+    mode: str,
+) -> dict:
+    """Have Qwen synthesize a materially different strategy from full context."""
+    context = dict(row.get("context", {}))
+    prompt = f"""You are Qwen, the manager. The current approach is repeatedly failing.
+Create a materially different strategy for Codex from the full available context.
+Do not ask the owner unless new authority or one human-only input is genuinely required.
+
+Goal: {plan.goal}
+Current milestone: {plan.milestones[int(row["current_milestone"])]}
+Verification: {json.dumps(plan.verification)}
+Approved authority: {json.dumps(plan.budget.to_dict())}
+Latest inspection: {inspection[:22000]}
+Persistent manager context and prior attempts: {json.dumps(context)[-18000:]}
+Latest failure: {failure[:5000]}
+
+Return JSON only:
+{{
+  "strategy": "concise new approach",
+  "codex_guidance": "specific next instruction",
+  "why_different": "how this avoids the previous failure",
+  "owner_needed": false,
+  "owner_request": "",
+  "risk": "low|medium|high",
+  "input_request": null
+}}
+
+If input_request is needed, request exactly one value with key, prompt, reason,
+and sensitive. Never request several human inputs together."""
+    return _ask_json_object(
+        settings,
+        [
+            {
+                "role": "system",
+                "content": "Return strict JSON only. Replan as the manager.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        mode,
+        num_predict=2048,
+        num_ctx=12288,
+    )
+
+
 def _repair_invalid_action_batch(settings, plan: RemotePlan, milestone: str, proposal: dict, error: str, mode: str) -> dict:
     """Let Qwen repair Codex's malformed action batch without involving the owner."""
     prompt = f"""You are Qwen, the manager. Codex returned an invalid action batch.
@@ -857,7 +907,10 @@ def _amend_budget_for_action(plan: RemotePlan, action: dict) -> RemotePlan:
     return RemotePlan.from_dict(raw, plan.target, plan.id)
 
 
-def run_remote_plan_step(settings, remote_store, row: dict, mode: str):
+def run_remote_plan_step(
+    settings, remote_store, row: dict, mode: str, inputs: dict[str, str] | None = None
+):
+    inputs = dict(inputs or {})
     target_raw = remote_store.get_target(row["target"])
     if not target_raw:
         raise RemoteOrchestrationError("remote target disappeared")
@@ -1210,17 +1263,54 @@ def run_remote_plan_step(settings, remote_store, row: dict, mode: str):
             "authority:\n" + failure_detail
         )
         if attempts >= plan.budget.max_attempts_per_milestone:
-            remote_store.create_deviation(
-                plan.id,
-                plan.target,
-                "remote milestone repeatedly failed after partial execution",
+            replan = _manager_replan_remote(
+                settings,
+                plan,
+                row,
+                inspection.get("output", ""),
+                failure_detail,
+                mode,
+            )
+            context["manager_strategy"] = str(replan.get("strategy", ""))[:3000]
+            context["next_guidance"] = str(
+                replan.get("codex_guidance", context["next_guidance"])
+            )[:3000]
+            context = _append_history(
+                context,
                 {
-                    "type": "stalled",
-                    "milestone": plan.milestones[index],
-                    "results": results[-3:],
-                    "suggested_action": context["next_guidance"],
+                    "milestone": index,
+                    "manager_replan": context["manager_strategy"],
+                    "why_different": str(replan.get("why_different", ""))[:1800],
                 },
             )
+            if replan.get("owner_needed") is True:
+                remote_store.create_deviation(
+                    plan.id,
+                    plan.target,
+                    "Qwen replanned and needs one owner decision",
+                    {
+                        "type": "manager_escalation",
+                        "milestone": plan.milestones[index],
+                        "reason": str(replan.get("why_different", ""))[:2000],
+                        "boss_request": str(replan.get("owner_request", ""))[:500],
+                        "risk": str(replan.get("risk", "medium"))[:16],
+                        "input_request": replan.get("input_request"),
+                        "suggested_action": context["next_guidance"],
+                    },
+                )
+            else:
+                remote_store.update_plan(
+                    plan.id,
+                    status="approved",
+                    attempts=0,
+                    codex_thread="",
+                    context=context,
+                )
+                remote_store.event(
+                    plan.id,
+                    "remote_manager_replanned",
+                    context["manager_strategy"][:1800],
+                )
         else:
             remote_store.update_plan(
                 plan.id,
