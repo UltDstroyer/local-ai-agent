@@ -316,6 +316,86 @@ class RemotePlan:
         }
 
 
+def critical_remote_exec_reason(command: str) -> str | None:
+    """Return a short reason when arbitrary SSH execution crosses a critical boundary."""
+    if not isinstance(command, str):
+        return None
+    lower = command.lower()
+
+    critical_patterns = (
+        (
+            r"\b(?:mkfs(?:\.\w+)?|wipefs|fdisk|cfdisk|sfdisk|parted)\b",
+            "disk formatting or partition-table mutation",
+        ),
+        (
+            r"\bdd\b[^\n]*\bof=/dev/(?:sd|nvme|mmcblk|vd|xvd)",
+            "raw block-device overwrite",
+        ),
+        (
+            r"\brm\s+(?:-[a-z]*r[a-z]*f[a-z]*|-[a-z]*f[a-z]*r[a-z]*)\s+"
+            r"(?:/|/etc(?:/|\s|$)|/boot(?:/|\s|$)|/usr(?:/|\s|$))",
+            "recursive deletion of a critical system path",
+        ),
+        (
+            r"\b(?:shutdown|poweroff|halt|reboot)\b",
+            "target power or reboot operation",
+        ),
+        (
+            r"\b(?:passwd|chpasswd|userdel|usermod)\b",
+            "account or authentication mutation",
+        ),
+        (
+            r"\b(?:iptables|ip6tables)\b[^\n]*(?:\s-f\b|\s-p\s+(?:input|output|forward)\s+drop\b)",
+            "firewall policy change that can sever access",
+        ),
+        (
+            r"\bnft\b[^\n]*\bflush\s+ruleset\b",
+            "firewall ruleset flush",
+        ),
+        (
+            r"\bip\s+(?:link|addr|route)\s+(?:del|delete|flush|replace|set)\b",
+            "network configuration change that can sever access",
+        ),
+    )
+    for pattern, reason in critical_patterns:
+        if re.search(pattern, lower):
+            return reason
+
+    sensitive_paths = (
+        "/etc/ssh/sshd_config",
+        "/etc/ssh/sshd_config.d/",
+        "/etc/sudoers",
+        "/etc/sudoers.d/",
+        "/etc/passwd",
+        "/etc/shadow",
+        "/etc/fstab",
+        "/etc/systemd/network/",
+        "/etc/network/interfaces",
+        "/etc/network/interfaces.d/",
+    )
+    mutation_markers = (
+        "sed ",
+        "perl ",
+        "python ",
+        "tee ",
+        "printf ",
+        "echo ",
+        "cat >",
+        "cp ",
+        "mv ",
+        "rm ",
+        "chmod ",
+        "chown ",
+        "truncate ",
+    )
+    if any(path in lower for path in sensitive_paths) and any(
+        marker in lower for marker in mutation_markers
+    ):
+        return "mutation of authentication, privilege, mount, or network configuration"
+
+    return None
+
+
 def validate_remote_action(action: object, budget: RemoteBudget) -> dict:
     if not isinstance(action, dict):
         raise RemoteContractError("remote action must be an object")
@@ -421,6 +501,11 @@ def validate_remote_action(action: object, budget: RemoteBudget) -> dict:
         if any(re.search(pattern, lower_command) for pattern in typed_only_patterns):
             raise RemoteContractError(
                 "remote_exec dependency/service mutation must use a typed action"
+            )
+        critical_reason = critical_remote_exec_reason(command)
+        if critical_reason:
+            raise RemoteContractError(
+                "critical remote_exec requires owner approval: " + critical_reason
             )
         result["command"] = command
         result["as_root"] = as_root
