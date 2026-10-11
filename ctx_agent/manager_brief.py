@@ -31,8 +31,8 @@ def _fallback_brief(deviation: dict) -> dict:
 
     recommendation = suggested[:500] if suggested else "Review this deviation and decide whether to approve it."
     proposed = request.get("proposed_action") or request.get("action") or {}
-    request_text = ""
-    if isinstance(proposed, dict) and proposed:
+    request_text = str(request.get("boss_request", "")).strip()
+    if not request_text and isinstance(proposed, dict) and proposed:
         op = str(proposed.get("op", "change"))
         if op == "check":
             target = proposed.get("service") or proposed.get("path") or proposed.get("url") or proposed.get("check")
@@ -110,6 +110,13 @@ Return JSON only:
         value = json.loads(str(message.get("content", "")))
         if not isinstance(value, dict):
             raise ValueError("manager brief was not an object")
+        concrete = str(value.get("request", "")).strip()
+        stored = str((deviation.get("request") or {}).get("boss_request", "")).strip()
+        if stored:
+            concrete = stored
+        if not concrete:
+            raise ValueError("manager brief omitted the concrete request")
+        value["request"] = concrete
         risk = str(value.get("risk", "medium")).lower()
         if risk not in ("low", "medium", "high"):
             risk = "medium"
