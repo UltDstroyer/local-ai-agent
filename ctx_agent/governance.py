@@ -205,6 +205,35 @@ def _plain_request(request: dict) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+_OBSERVABLE_INPUT_MARKERS = (
+    " status",
+    "_status",
+    "is running",
+    "service running",
+    "properly configured",
+    "is configured",
+    "check whether",
+    "verify whether",
+    "confirm whether",
+    "what does ",
+    "show me",
+    "output of",
+    "journal",
+    "systemctl",
+    " path",
+    "_path",
+    "file path",
+    "credential path",
+    "credentials path",
+    "config path",
+    "configuration path",
+    "where is",
+    "where are",
+    "location of",
+    "located at",
+)
+
+
 def _valid_input_request(value: object) -> bool:
     if not isinstance(value, dict):
         return False
@@ -212,7 +241,7 @@ def _valid_input_request(value: object) -> bool:
     prompt = value.get("prompt")
     reason = value.get("reason")
     sensitive = value.get("sensitive", False)
-    return (
+    if not (
         isinstance(key, str)
         and bool(key.strip())
         and isinstance(prompt, str)
@@ -220,7 +249,12 @@ def _valid_input_request(value: object) -> bool:
         and isinstance(reason, str)
         and bool(reason.strip())
         and type(sensitive) is bool
+    ):
+        return False
+    combined = " ".join(
+        (key + " " + prompt + " " + reason).lower().split()
     )
+    return not any(marker in combined for marker in _OBSERVABLE_INPUT_MARKERS)
 
 
 def valid_remote_owner_request(request: object) -> bool:
