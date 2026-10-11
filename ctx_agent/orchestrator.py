@@ -136,7 +136,9 @@ def _inventory_summary(root: Path) -> list[str]:
     return sorted(inventory(root))[:500]
 
 
-def _planner_prompt(goal: str, files: list[str], notes: dict) -> str:
+def _planner_prompt(
+    goal: str, files: list[str], notes: dict, owner_policy: dict | None = None
+) -> str:
     return f"""You are the primary engineer negotiating a project execution plan with a
 local administrative agent. Do not edit files. Produce JSON only.
 
@@ -148,6 +150,12 @@ Project files:
 
 Owner notes:
 {json.dumps(notes)[:3000]}
+
+Explicit owner work preferences and decision evidence:
+{json.dumps(owner_policy or {})[:5000]}
+
+Treat explicit current instructions as higher priority than historical preference
+evidence. Past approvals are context, never blanket authorization.
 
 Design the smallest practical plan that satisfies the goal. Minimize touched
 files and lines. Include every file/pattern that may need modification, but do
@@ -179,7 +187,13 @@ unless the goal clearly requires them. The budget should be tight rather than
 generous."""
 
 
-def _admin_reconcile_prompt(goal: str, codex_plan: dict, files: list[str], notes: dict) -> str:
+def _admin_reconcile_prompt(
+    goal: str,
+    codex_plan: dict,
+    files: list[str],
+    notes: dict,
+    owner_policy: dict | None = None,
+) -> str:
     return f"""You are the local project administrator. Codex is the main engineer.
 Your job is to narrow scope, preserve owner intent, and create a mutation lease
 that Codex cannot expand by itself. Do not edit files. Return JSON only.
@@ -195,6 +209,12 @@ Project inventory:
 
 Owner notes:
 {json.dumps(notes)[:5000]}
+
+Explicit owner work preferences and decision evidence:
+{json.dumps(owner_policy or {})[:5000]}
+
+These preferences guide planning style only. They never grant authority that
+the current plan or owner has not explicitly approved.
 
 Return the same plan schema as Codex. Keep the technical plan when sound, but
 reduce unnecessary write scope and budgets. Every milestone must be concrete.
@@ -240,7 +260,7 @@ it."""
 
 def create_negotiated_plan(
     settings, store, source: Path, project: str, goal: str, mode: str,
-    progress=None,
+    progress=None, owner_policy: dict | None = None,
 ) -> dict:
     if settings.codex_bridge_socket is None:
         raise OrchestrationError("Codex bridge is not configured")
@@ -267,7 +287,7 @@ def create_negotiated_plan(
         {
             "op": "consult",
             "cwd": str(source),
-            "prompt": _planner_prompt(goal, files, notes),
+            "prompt": _planner_prompt(goal, files, notes, owner_policy),
             "timeout": 900,
         },
         timeout=930,
@@ -292,7 +312,9 @@ def create_negotiated_plan(
             },
             {
                 "role": "user",
-                "content": _admin_reconcile_prompt(goal, candidate, files, notes),
+                "content": _admin_reconcile_prompt(
+                    goal, candidate, files, notes, owner_policy
+                ),
             },
         ],
         mode,
