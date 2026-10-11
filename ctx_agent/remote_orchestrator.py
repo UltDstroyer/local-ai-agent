@@ -886,20 +886,35 @@ def run_remote_plan_step(settings, remote_store, row: dict, mode: str):
             plan.id, "remote_action_proposal_rejected", proposal_error
         )
         if attempts >= plan.budget.max_attempts_per_milestone:
-            remote_store.create_deviation(
-                plan.id,
-                plan.target,
-                "Codex repeatedly proposed an invalid remote action batch",
+            recoveries = int(context.get("invalid_proposal_recoveries", 0)) + 1
+            context["invalid_proposal_recoveries"] = recoveries
+            context["next_guidance"] = (
+                "Qwen manager correction: your previous remote action proposal "
+                "was rejected because " + proposal_error + ". Start fresh. "
+                "Return ONLY one JSON object with an 'actions' array containing "
+                "1 to 20 supported typed actions for the current milestone. "
+                "Do not include prose outside JSON and do not reuse the malformed "
+                "proposal shape."
+            )
+            context = _append_history(
+                context,
                 {
-                    "type": "invalid_proposal",
-                    "reason": proposal_error,
-                    "proposal_excerpt": json.dumps(proposal)[:3000],
-                    "suggested_action": (
-                        "Review the rejected proposal shape. Approve to retry "
-                        "with the exact validation correction, or reject to "
-                        "force a different approach."
-                    ),
+                    "milestone": index,
+                    "manager_recovery": "invalid_remote_action_batch",
+                    "recovery_count": recoveries,
                 },
+            )
+            remote_store.event(
+                plan.id,
+                "remote_manager_recovered_invalid_proposal",
+                f"recovery {recoveries}: {proposal_error}",
+            )
+            remote_store.update_plan(
+                plan.id,
+                status="approved",
+                attempts=0,
+                codex_thread="",
+                context=context,
             )
         else:
             remote_store.update_plan(
