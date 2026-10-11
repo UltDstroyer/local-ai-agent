@@ -6,6 +6,7 @@ import argparse
 import getpass
 import json
 import os
+import select
 import socket
 import sys
 import threading
@@ -620,6 +621,254 @@ def _follow_approved_plan(path, plan, *, remote):
         time.sleep(1.0)
 
 
+
+def _console_pending_deviation(path, *, remote, scope, plan_id):
+    result = call(
+        path,
+        {
+            "op": "remote_deviation_list" if remote else "deviation_list",
+            "target" if remote else "project": scope,
+        },
+        timeout=15,
+    )
+    return next((
+        item for item in (result.get("deviations") or [])
+        if item.get("status") == "pending"
+        and item.get("plan") == plan_id
+    ), None)
+
+
+def _console_approve_deviation(path, *, remote, deviation):
+    op = "remote_deviation_approve" if remote else "deviation_approve"
+    result = call(path, {"op": op, "id": deviation["id"]}, timeout=900)
+    if remote and isinstance(result.get("input_request"), dict):
+        request = result["input_request"]
+        supplied = _prompt_human_input(request)
+        if not supplied:
+            raise ValueError("input cannot be empty")
+        result = call(
+            path,
+            {
+                "op": "remote_input_submit",
+                "id": result.get("deviation", ""),
+                "key": request.get("key", ""),
+                "value": supplied,
+            },
+            timeout=900,
+        )
+        print(
+            "[Qwen manager] received the input; its value is not stored in logs.",
+            flush=True,
+        )
+    print("[Qwen manager] deviation approved; work resumed", flush=True)
+    return result
+
+
+def _manager_console(path, plan, *, remote):
+    if not sys.stdin.isatty():
+        _follow_approved_plan(path, plan, remote=remote)
+        return
+
+    pid = str(plan.get("id", ""))
+    scope_key = "target" if remote else "project"
+    scope = str(plan.get(scope_key, ""))
+    if not pid or not scope:
+        raise ValueError("manager console requires a concrete plan and scope")
+
+    progress_op = "remote_plan_progress" if remote else "plan_progress"
+    chat_op = "remote_plan_chat" if remote else "plan_chat"
+    report_op = "remote_plan_report" if remote else "plan_report"
+    approve_plan_op = "remote_plan_approve" if remote else "plan_approve"
+    reject_plan_op = "remote_plan_reject" if remote else "plan_reject"
+    reject_dev_op = "remote_deviation_reject" if remote else "deviation_reject"
+
+    print("[Qwen manager] manager console attached")
+    print("  type a message to talk to Qwen")
+    print("  /report  /progress  /approve  /reject  /help  /quit")
+
+    last_report = None
+    shown_deviation = ""
+    latest_snapshot = {}
+    while True:
+        try:
+            latest_snapshot = call(
+                path,
+                {
+                    "op": progress_op,
+                    scope_key: scope,
+                    "id": pid,
+                },
+                timeout=15,
+            )["progress"]
+        except (OSError, RuntimeError, ValueError, KeyError) as exc:
+            print("[Qwen manager] console lost progress:", str(exc), file=sys.stderr)
+            return
+
+        report_key = (
+            latest_snapshot.get("phase"),
+            latest_snapshot.get("current_stage_index"),
+            tuple(
+                (stage.get("index"), stage.get("status"))
+                for stage in (
+                    latest_snapshot.get("stages")
+                    or latest_snapshot.get("planning_stages")
+                    or []
+                )
+            ),
+        )
+        if report_key != last_report:
+            if last_report is not None:
+                print("")
+            _print_progress_report(latest_snapshot)
+            last_report = report_key
+
+        phase = latest_snapshot.get("phase")
+        if phase == "awaiting_deviation":
+            pending = _console_pending_deviation(
+                path,
+                remote=remote,
+                scope=scope,
+                plan_id=pid,
+            )
+            if pending and pending.get("id") != shown_deviation:
+                detail = call(
+                    path,
+                    {
+                        "op": (
+                            "remote_deviation_show"
+                            if remote else "deviation_show"
+                        ),
+                        "id": pending["id"],
+                    },
+                    timeout=180,
+                )
+                _print_live_deviation(
+                    detail.get("deviation", pending),
+                    detail.get("brief", {}),
+                )
+                shown_deviation = pending["id"]
+        else:
+            shown_deviation = ""
+
+        if phase == "failed_internal":
+            successor = _wait_for_recovery_successor(
+                path,
+                remote=remote,
+                scope=scope,
+                failed_plan_id=pid,
+            )
+            if successor:
+                pid = successor["id"]
+                last_report = None
+                shown_deviation = ""
+                continue
+            return
+
+        if phase in ("completed", "cancelled", "rejected"):
+            print(f"[Qwen manager] plan {phase}")
+            return
+
+        try:
+            readable, _, _ = select.select([sys.stdin], [], [], 1.0)
+        except (OSError, ValueError):
+            readable = []
+        if not readable:
+            continue
+
+        line = sys.stdin.readline()
+        if line == "":
+            return
+        text = line.strip()
+        if not text:
+            continue
+
+        if text in ("/quit", "/exit"):
+            print("[Qwen manager] console detached; work continues independently.")
+            return
+        if text == "/help":
+            print("  normal text  talk to Qwen")
+            print("  /report      concise whole-history manager report")
+            print("  /progress    current structured progress")
+            print("  /approve     approve current plan/deviation")
+            print("  /reject      reject current plan/deviation")
+            print("  /quit        detach without stopping work")
+            continue
+        if text == "/progress":
+            _print_progress_report(latest_snapshot)
+            continue
+        if text == "/report":
+            result = call(
+                path,
+                {"op": report_op, scope_key: scope, "id": pid},
+                timeout=900,
+            )
+            _print_manager_report(result)
+            continue
+        if text in ("/approve", "/reject"):
+            pending = _console_pending_deviation(
+                path,
+                remote=remote,
+                scope=scope,
+                plan_id=pid,
+            )
+            if pending:
+                if text == "/approve":
+                    _console_approve_deviation(
+                        path,
+                        remote=remote,
+                        deviation=pending,
+                    )
+                else:
+                    call(
+                        path,
+                        {"op": reject_dev_op, "id": pending["id"]},
+                        timeout=900,
+                    )
+                    print("[Qwen manager] deviation rejected")
+                shown_deviation = ""
+                last_report = None
+                continue
+
+            if phase == "awaiting_approval":
+                op = approve_plan_op if text == "/approve" else reject_plan_op
+                result = call(
+                    path,
+                    {
+                        "op": op,
+                        scope_key: scope,
+                        "id": pid,
+                    },
+                    timeout=900,
+                )
+                print(
+                    "[Qwen manager] approved"
+                    if text == "/approve"
+                    else "[Qwen manager] rejected"
+                )
+                if text == "/reject":
+                    return
+                last_report = None
+                continue
+
+            print("[Qwen manager] there is no owner decision waiting right now")
+            continue
+
+        result = call(
+            path,
+            {
+                "op": chat_op,
+                scope_key: scope,
+                "id": pid,
+                "message": text,
+            },
+            timeout=900,
+        )
+        print("[Qwen manager]", result.get("reply", ""))
+        pending = result.get("pending_deviation")
+        if isinstance(pending, dict) and pending.get("status") == "pending":
+            print("  pending decision remains open:", pending.get("id", ""))
+
+
 def _add_project_and_optional_id(parser):
     parser.add_argument("project")
     parser.add_argument("id", nargs="?")
@@ -662,6 +911,10 @@ def main(argv=None):
     item.add_argument("project")
     item.add_argument("id", nargs="?")
 
+    item = sub.add_parser("plan-console")
+    item.add_argument("project")
+    item.add_argument("id")
+
     item = sub.add_parser("plan-chat")
     item.add_argument("project")
     item.add_argument("id")
@@ -700,6 +953,10 @@ def main(argv=None):
     item = sub.add_parser("remote-plan-report")
     item.add_argument("target")
     item.add_argument("id", nargs="?")
+
+    item = sub.add_parser("remote-plan-console")
+    item.add_argument("target")
+    item.add_argument("id")
 
     item = sub.add_parser("remote-plan-chat")
     item.add_argument("target")
@@ -744,6 +1001,19 @@ def main(argv=None):
                 data[field] = value
 
     try:
+        if args.action in ("plan-console", "remote-plan-console"):
+            remote = args.action == "remote-plan-console"
+            _manager_console(
+                args.socket,
+                {
+                    "id": args.id,
+                    "target" if remote else "project": (
+                        args.target if remote else args.project
+                    ),
+                },
+                remote=remote,
+            )
+            return 0
         if args.action == "import":
             from .snapshot import SnapshotError, import_files
 
@@ -811,7 +1081,7 @@ def main(argv=None):
             plan = result["plan"]
             remote = args.action.startswith("remote-")
             print("[Qwen manager] approved", file=sys.stderr, flush=True)
-            _follow_approved_plan(args.socket, plan, remote=remote)
+            _manager_console(args.socket, plan, remote=remote)
         elif args.action in (
             "deviation-approve",
             "remote-deviation-approve",
