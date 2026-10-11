@@ -452,6 +452,13 @@ class Coordinator:
             if key not in available:
                 available.append(key)
             context["available_inputs"] = available[-20:]
+            input_requests = dict(context.get("input_requests", {}))
+            input_requests[key] = {
+                "prompt": str(expected.get("prompt", "Enter value"))[:300],
+                "reason": str(expected.get("reason", "Human input is required."))[:600],
+                "sensitive": expected.get("sensitive") is True,
+            }
+            context["input_requests"] = input_requests
             self.remote_store.update_plan(pid, context=context)
             try:
                 plan = approve_remote_deviation(
@@ -813,7 +820,52 @@ class Coordinator:
                     current = self.remote_store.get_plan(row["id"])
                     if current and current["status"] == "running":
                         failure = classify_remote_error(exc)
-                        if failure["type"] in (
+                        if failure["type"] == "human_input_missing":
+                            context = dict(current.get("context", {}))
+                            available = [
+                                str(x) for x in context.get("available_inputs", [])
+                                if isinstance(x, str)
+                            ]
+                            live = set(self.remote_inputs.get(row["id"], {}))
+                            missing = next((key for key in available if key not in live), "")
+                            metadata = dict(context.get("input_requests", {})).get(missing, {})
+                            if missing:
+                                self.remote_store.create_deviation(
+                                    row["id"],
+                                    row["target"],
+                                    "Qwen needs one previously supplied ephemeral input again",
+                                    {
+                                        "type": "human_input_refresh",
+                                        "boss_request": (
+                                            "Allow me to ask you to re-enter one "
+                                            "ephemeral input that was lost after restart."
+                                        ),
+                                        "risk": "low",
+                                        "input_request": {
+                                            "key": missing,
+                                            "prompt": str(metadata.get("prompt", f"Re-enter {missing}"))[:300],
+                                            "reason": str(metadata.get(
+                                                "reason",
+                                                "The coordinator restarted, so the value is no longer in memory."
+                                            ))[:600],
+                                            "sensitive": metadata.get("sensitive") is True,
+                                        },
+                                        "suggested_action": (
+                                            "Re-enter only this value; no new authority is requested."
+                                        ),
+                                    },
+                                )
+                            else:
+                                self.remote_store.update_plan(
+                                    row["id"],
+                                    status="cancelled",
+                                    result=(
+                                        "An ephemeral input was missing but its key "
+                                        "could not be identified safely."
+                                    ),
+                                    context=context,
+                                )
+                        elif failure["type"] in (
                             "action_format",
                             "codex_format",
                             "timeout",
