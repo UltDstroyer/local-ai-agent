@@ -165,6 +165,40 @@ def _print_live_deviation(deviation, brief):
     )
 
 
+def _show_pending_deviation(path, *, remote, scope, plan_id=""):
+    deviations = call(
+        path,
+        {
+            "op": "remote_deviation_list" if remote else "deviation_list",
+            "target" if remote else "project": scope,
+        },
+        timeout=15,
+    )["deviations"]
+    pending = next(
+        (
+            item for item in deviations
+            if item.get("status") == "pending"
+            and (not plan_id or item.get("plan") == plan_id)
+        ),
+        None,
+    )
+    if not pending:
+        return False
+    detail = call(
+        path,
+        {
+            "op": "remote_deviation_show" if remote else "deviation_show",
+            "id": pending["id"],
+        },
+        timeout=180,
+    )
+    _print_live_deviation(
+        detail.get("deviation", pending),
+        detail.get("brief", {}),
+    )
+    return True
+
+
 def _follow_approved_plan(path, plan, *, remote):
     pid = plan.get("id", "")
     scope = plan.get("target" if remote else "project", "")
@@ -189,37 +223,9 @@ def _follow_approved_plan(path, plan, *, remote):
             last = key
         phase = snapshot.get("phase")
         if phase == "awaiting_deviation":
-            deviations = call(
-                path,
-                {
-                    "op": "remote_deviation_list" if remote else "deviation_list",
-                    "target" if remote else "project": scope,
-                },
-                timeout=15,
-            )["deviations"]
-            pending = next(
-                (
-                    item for item in deviations
-                    if item.get("plan") == pid and item.get("status") == "pending"
-                ),
-                None,
+            _show_pending_deviation(
+                path, remote=remote, scope=scope, plan_id=pid
             )
-            if pending:
-                detail = call(
-                    path,
-                    {
-                        "op": (
-                            "remote_deviation_show"
-                            if remote else "deviation_show"
-                        ),
-                        "id": pending["id"],
-                    },
-                    timeout=180,
-                )
-                _print_live_deviation(
-                    detail.get("deviation", pending),
-                    detail.get("brief", {}),
-                )
             return
         if phase in (
             "completed",
@@ -391,6 +397,19 @@ def main(argv=None):
             deviation = result["deviation"]
             brief = result.get("brief", {})
             _print_live_deviation(deviation, brief)
+        elif args.action in (
+            "plan-approve",
+            "remote-plan-approve",
+            "deviation-approve",
+            "remote-deviation-approve",
+            "plan-reject",
+            "remote-plan-reject",
+            "deviation-reject",
+            "remote-deviation-reject",
+        ):
+            plan = result.get("plan") or {}
+            phase = (plan.get("progress") or {}).get("phase") or plan.get("status") or "updated"
+            print(f"[Qwen manager] {phase}", file=sys.stderr)
         elif args.action in ("diff", "plan-diff"):
             print(result["diff"])
             print("Changed:", ", ".join(result["changed"]))
