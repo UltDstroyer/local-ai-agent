@@ -1200,6 +1200,14 @@ def approve_deviation(settings, store, source: Path, did: str) -> dict:
             "this local deviation type is obsolete or unsupported; reject it and "
             "let Qwen/Codex re-evaluate under the current policy"
         )
+
+    prepared_plan = _plan_from_row(row)
+    if request_type == "mutation_amendment":
+        # Parse and validate the complete amendment before consuming the owner's
+        # decision. A malformed mutation lease must not strand the plan after
+        # the deviation has already been marked approved.
+        prepared_plan = apply_amendment(prepared_plan, request)
+
     if not store.resolve_deviation(did, True):
         raise OrchestrationError("deviation changed concurrently")
     current_row = store.get_plan(deviation["plan"])
@@ -1207,7 +1215,7 @@ def approve_deviation(settings, store, source: Path, did: str) -> dict:
         raise OrchestrationError("plan disappeared after deviation approval")
     plan = _plan_from_row(current_row)
     if request_type == "mutation_amendment":
-        plan = apply_amendment(plan, request)
+        plan = prepared_plan
         store.update_plan(plan.id, plan=plan.to_dict())
     context = dict(current_row.get("context", {}))
     context["next_guidance"] = str(request.get(
