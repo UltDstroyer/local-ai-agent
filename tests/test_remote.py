@@ -15,6 +15,7 @@ from ctx_agent.remote import (
 from ctx_agent.remote_orchestrator import (
     _ask_json_object,
     _json_object,
+    _completion_review,
     _remote_actions_error,
     _remote_context_dir,
     _validated_remote_plan,
@@ -223,6 +224,36 @@ class RemoteActionProposalTests(unittest.TestCase):
         self.assertIn("at least one", _remote_actions_error([]))
         self.assertIn("21 remote actions", _remote_actions_error([{}] * 21))
         self.assertIsNone(_remote_actions_error([{"op": "check"}]))
+
+
+class RemoteManagerRoleTests(unittest.TestCase):
+    def test_completion_review_is_milestone_level(self):
+        settings = SimpleNamespace()
+        with patch("ctx_agent.remote_orchestrator.ask") as mocked:
+            mocked.return_value = {
+                "content": (
+                    '{"state":"complete","guidance":"","context_note":"ok",'
+                    '"reason":"verified"}'
+                )
+            }
+            value = _completion_review(
+                settings,
+                RemotePlan.from_dict({
+                    "goal": "Configure nginx",
+                    "milestones": ["Configure"],
+                    "verification": ["nginx active"],
+                    "risks": [],
+                    "assumptions": [],
+                    "remote_budget": budget(),
+                }, "pi"),
+                "Configure",
+                [{"ok": True}],
+                "nginx active",
+                "balanced",
+            )
+        self.assertEqual(value["state"], "complete")
+        prompt = mocked.call_args.args[1][1]["content"]
+        self.assertIn("Do not re-litigate individual in-contract actions", prompt)
 
 
 class RemoteJSONRetryTests(unittest.TestCase):
