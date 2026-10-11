@@ -811,6 +811,24 @@ def _manager_scope_review(
     mode: str,
 ) -> dict:
     risk = _scope_risk(action)
+    if isinstance(action, dict):
+        if action.get("op") == "package_install":
+            return {
+                "approve": False,
+                "escalate": True,
+                "risk": "medium",
+                "reason": "downloading/installing a new dependency requires owner approval",
+            }
+        if (
+            action.get("op") == "service"
+            and action.get("action") in ("start", "enable", "enable_now")
+        ):
+            return {
+                "approve": False,
+                "escalate": True,
+                "risk": "medium",
+                "reason": "activating a required service requires owner approval",
+            }
     if risk == "high":
         return {
             "approve": False,
@@ -900,6 +918,56 @@ def classify_remote_error(exc: Exception) -> dict:
         "type": kind,
         "error": text[:4000],
         "suggested_action": action,
+    }
+
+
+def _dependency_key(action: dict) -> str | None:
+    op = action.get("op")
+    if op == "package_install":
+        packages = sorted(str(x) for x in action.get("packages", []) if str(x))
+        return "packages:" + ",".join(packages) if packages else None
+    if op == "service" and action.get("action") in ("start", "enable", "enable_now"):
+        service = str(action.get("service", "")).strip()
+        return "service:" + canonical_service_name(service) if service else None
+    return None
+
+
+def _dependency_owner_request(plan: RemotePlan, action: dict, proposal: dict) -> dict:
+    milestone = ""
+    summary = str(proposal.get("summary", "")).strip()
+    op = action.get("op")
+    if op == "package_install":
+        packages = [str(x) for x in action.get("packages", []) if str(x)]
+        label = ", ".join(packages) or "the required package"
+        return {
+            "type": "dependency_install",
+            "dependency_key": _dependency_key(action),
+            "proposed_action": action,
+            "boss_request": f"Allow me to download and install {label}.",
+            "risk": "medium",
+            "reason": (
+                f"I need {label} for the current milestone: {plan.milestones[0] if plan.milestones else plan.goal}. "
+                + (summary if summary else "The dependency is not currently available on the target.")
+            )[:1800],
+            "suggested_action": (
+                f"Install {label} only if you want this dependency added to the server."
+            ),
+        }
+    service = str(action.get("service", "")).strip()
+    verb = str(action.get("action", "start"))
+    return {
+        "type": "service_activation",
+        "dependency_key": _dependency_key(action),
+        "proposed_action": action,
+        "boss_request": f"Allow me to {verb} the {service} service.",
+        "risk": "medium",
+        "reason": (
+            f"I need the {service} service active for the current milestone. "
+            + (summary if summary else "This service is required by the chosen approach.")
+        )[:1800],
+        "suggested_action": (
+            f"{verb.capitalize()} {service} only if you want this service used for the task."
+        ),
     }
 
 
@@ -1159,7 +1227,19 @@ def run_remote_plan_step(
         return
 
     validated = []
+    approved_dependencies = set(context.get("approved_dependencies", []))
     for action in actions:
+        dependency_key = _dependency_key(action)
+        if dependency_key and dependency_key not in approved_dependencies:
+            request = _dependency_owner_request(plan, action, proposal)
+            request["milestone"] = plan.milestones[index]
+            remote_store.create_deviation(
+                plan.id,
+                plan.target,
+                "Qwen needs approval for a new remote dependency",
+                request,
+            )
+            return
         try:
             checked = validate_remote_action(action, plan.budget)
         except RemoteContractError as exc:
@@ -1490,6 +1570,10 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
         # Approval means the owner handled/accepted the manual dependency.
         # The unsupported operation is still NOT added to the broker.
         pass
+    elif request.get("type") in ("dependency_install", "service_activation"):
+        action = request.get("proposed_action", {})
+        plan = _amend_budget_for_action(plan, action)
+        remote_store.update_plan(plan.id, plan=plan.to_dict())
     elif request.get("type") == "remote_budget":
         raw = plan.to_dict()
         budget = raw["remote_budget"]
@@ -1509,6 +1593,12 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
     if not remote_store.resolve_deviation(did, True):
         raise RemoteOrchestrationError("remote deviation changed concurrently")
     context = dict(row.get("context", {}))
+    if request.get("type") in ("dependency_install", "service_activation"):
+        approved_dependencies = list(context.get("approved_dependencies", []))
+        dependency_key = str(request.get("dependency_key", "")).strip()
+        if dependency_key and dependency_key not in approved_dependencies:
+            approved_dependencies.append(dependency_key)
+        context["approved_dependencies"] = approved_dependencies[-50:]
     if request.get("type") == "manual_required":
         context["next_guidance"] = (
             "Owner handled or accepted the manual dependency. Re-inspect the "
