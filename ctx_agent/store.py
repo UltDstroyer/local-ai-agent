@@ -245,32 +245,13 @@ class Store:
             context = dict(fields.get("context") or (
                 json.loads(context_row["context_json"]) if context_row else {}
             ))
-            cycles = int(context.get("hard_replan_cycles", 0)) + 1
-            context["hard_replan_cycles"] = cycles
             prior = str(fields.get("result", "")).strip()
             context["last_internal_failure"] = prior[:2400]
-            if cycles <= 2:
-                context["next_guidance"] = (
-                    "Qwen manager hard recovery: start a genuinely fresh technical "
-                    "replan from the current observed state. Re-inspect first, open "
-                    "a fresh Codex thread, and do not repeat the failed strategy. "
-                    + (("Previous failure: " + prior) if prior else "")
-                )[:3500]
-                fields["status"] = "approved"
-                fields["attempts"] = 0
-                fields["codex_thread"] = ""
-                fields["context"] = context
-                fields["result"] = ""
-            else:
-                context["next_guidance"] = ""
-                fields["status"] = "failed_internal"
-                fields["context"] = context
-                if not prior:
-                    fields["result"] = (
-                        "Qwen and Codex exhausted bounded fresh replans without "
-                        "identifying an owner decision."
-                    )
-            requested_status = fields.get("status")
+            context["recovery_plan_required"] = True
+            context["next_guidance"] = ""
+            fields["status"] = "failed_internal"
+            fields["context"] = context
+            requested_status = "failed_internal"
         terminal = {"completed", "cancelled", "rejected", "failed_internal"}
         if current_status in terminal:
             if requested_status is not None and requested_status != current_status:
@@ -407,42 +388,8 @@ class Store:
         return ok
 
     def retry_internal_plan(self, pid: str) -> bool:
-        """Requeue only an internal failure or a legacy non-owner cancellation."""
-        with self.lock, self.db:
-            row = self.db.execute(
-                "SELECT status,context_json FROM plans WHERE id=?", (pid,)
-            ).fetchone()
-            if not row:
-                return False
-            status = row["status"]
-            if status == "cancelled":
-                owner_cancel = self.db.execute(
-                    "SELECT 1 FROM events WHERE job=? "
-                    "AND event='plan_cancelled_by_owner' LIMIT 1",
-                    (pid,),
-                ).fetchone()
-                if owner_cancel:
-                    return False
-            elif status != "failed_internal":
-                return False
-            context = json.loads(row["context_json"]) if row["context_json"] else {}
-            context["hard_replan_cycles"] = 0
-            context["next_guidance"] = (
-                "Qwen manager recovery: start a fresh Codex thread and choose a "
-                "materially different technical route from the current workspace "
-                "state. Preserve completed work and prior owner approvals."
-            )
-            now = time.time()
-            cur = self.db.execute(
-                "UPDATE plans SET status='approved',attempts=0,codex_thread='',"
-                "context_json=?,result='',error='',updated=? "
-                "WHERE id=? AND status IN ('failed_internal','cancelled')",
-                (json.dumps(context), now, pid),
-            )
-            ok = cur.rowcount == 1
-        if ok:
-            self.event(pid, "internal_plan_requeued", status)
-        return ok
+        """Hard failures require a separately approved successor plan."""
+        return False
 
     def next_plan(self):
         with self.lock, self.db:
