@@ -177,6 +177,62 @@ class AdapterTests(unittest.TestCase):
             "remote-deviation-approve", "abc123def456"
         ])
 
+    def test_progress_without_context_uses_single_remote_plan(self):
+        state = (
+            [],
+            [{"id": "plan123", "target": "pi", "status": "running"}],
+            [],
+            [],
+        )
+        with patch("ctx_agent.context_extension._global_state", return_value=state):
+            result, cli, _ = self.invoke(["progress"], context="")
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with([
+            "remote-plan-progress", "pi", "plan123"
+        ])
+
+    def test_deviation_without_args_shows_single_remote_pending(self):
+        state = (
+            [],
+            [],
+            [],
+            [{"id": "abc123def456", "target": "pi", "status": "pending"}],
+        )
+        with patch("ctx_agent.context_extension._global_state", return_value=state):
+            result, cli, _ = self.invoke(["deviation"], context="")
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with([
+            "remote-deviation-show", "abc123def456"
+        ])
+
+    def test_approve_without_context_prefers_pending_deviation(self):
+        state = (
+            [],
+            [{"id": "plan123", "target": "pi", "status": "awaiting_deviation"}],
+            [],
+            [{"id": "abc123def456", "target": "pi", "status": "pending"}],
+        )
+        with patch("ctx_agent.context_extension._global_state", return_value=state):
+            result, cli, _ = self.invoke(["approve"], context="")
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with([
+            "remote-deviation-approve", "abc123def456"
+        ])
+
+    def test_approve_without_context_uses_single_waiting_plan(self):
+        state = (
+            [],
+            [{"id": "plan123", "target": "pi", "status": "awaiting_approval"}],
+            [],
+            [],
+        )
+        with patch("ctx_agent.context_extension._global_state", return_value=state):
+            result, cli, _ = self.invoke(["approve"], context="")
+        self.assertEqual(result, 0)
+        cli.assert_called_once_with([
+            "remote-plan-approve", "pi", "plan123"
+        ])
+
     def test_unknown_command_rejected(self):
         result, cli, _ = self.invoke(["arbitrary-host-shell"])
         self.assertEqual(result, 2)
