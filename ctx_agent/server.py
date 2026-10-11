@@ -85,6 +85,33 @@ class Coordinator:
         self.execution_lock = threading.RLock()
         self.planning_progress = {}
         self.remote_inputs: dict[str, dict[str, str]] = {}
+        # Human-input values are intentionally process-memory only. If the
+        # coordinator restarted, persisted availability markers are stale.
+        for remote_row in self.remote_store.list_plans(limit=100):
+            if remote_row.get("status") not in (
+                "approved", "running", "awaiting_deviation"
+            ):
+                continue
+            context = dict(remote_row.get("context", {}))
+            available = list(context.get("available_inputs", []))
+            if not available:
+                continue
+            expired = list(context.get("expired_inputs", []))
+            for key in available:
+                if key not in expired:
+                    expired.append(key)
+            context["available_inputs"] = []
+            context["expired_inputs"] = expired[-20:]
+            context["next_guidance"] = (
+                "The coordinator restarted and ephemeral human inputs were cleared. "
+                "If one is still required, request that one input from the owner again."
+            )
+            self.remote_store.update_plan(remote_row["id"], context=context)
+            self.remote_store.event(
+                remote_row["id"],
+                "remote_ephemeral_inputs_expired_after_restart",
+                ",".join(str(x) for x in available)[:1000],
+            )
 
     def project(self, name):
         return project_path(self.settings.projects_dir, name)
@@ -761,23 +788,45 @@ class Coordinator:
                         failure = classify_remote_error(exc)
                         if failure["type"] in ("action_format", "codex_format"):
                             context = dict(current.get("context", {}))
+                            recoveries = int(
+                                context.get("worker_internal_recoveries", 0)
+                            ) + 1
+                            context["worker_internal_recoveries"] = recoveries
                             context["next_guidance"] = (
                                 "Qwen manager correction: this is an internal formatting "
                                 "or schema problem, not an owner decision. Repair the "
                                 "typed action/dependency/input shape and retry. "
                                 + str(failure.get("error", ""))[:1800]
                             )
-                            self.remote_store.update_plan(
-                                row["id"],
-                                status="approved",
-                                attempts=0,
-                                context=context,
-                            )
-                            self.remote_store.event(
-                                row["id"],
-                                "remote_internal_format_recovery",
-                                str(failure.get("error", ""))[:1200],
-                            )
+                            if recoveries <= 3:
+                                self.remote_store.update_plan(
+                                    row["id"],
+                                    status="approved",
+                                    attempts=0,
+                                    context=context,
+                                )
+                                self.remote_store.event(
+                                    row["id"],
+                                    "remote_internal_format_recovery",
+                                    f"{recoveries}: "
+                                    + str(failure.get("error", ""))[:1100],
+                                )
+                            else:
+                                self.remote_store.update_plan(
+                                    row["id"],
+                                    status="cancelled",
+                                    result=(
+                                        "Qwen and Codex repeatedly hit the same internal "
+                                        "format failure and stopped without requiring "
+                                        "an owner decision."
+                                    ),
+                                    context=context,
+                                )
+                                self.remote_store.event(
+                                    row["id"],
+                                    "remote_internal_recovery_exhausted",
+                                    str(failure.get("error", ""))[:1200],
+                                )
                         else:
                             self.remote_store.create_deviation(
                                 row["id"],
@@ -817,23 +866,45 @@ class Coordinator:
                             "workspace_tool",
                         ):
                             context = dict(current.get("context", {}))
+                            recoveries = int(
+                                context.get("worker_internal_recoveries", 0)
+                            ) + 1
+                            context["worker_internal_recoveries"] = recoveries
                             context["next_guidance"] = (
                                 "Qwen manager correction: this is an internal technical "
                                 "failure, not an owner decision. Diagnose it with Codex "
                                 "and retry or choose a supported approach. "
                                 + str(failure.get("error", ""))[:1800]
                             )
-                            self.store.update_plan(
-                                row["id"],
-                                status="approved",
-                                attempts=0,
-                                context=context,
-                            )
-                            self.store.event(
-                                row["id"],
-                                "project_internal_failure_recovery",
-                                str(failure.get("error", ""))[:1200],
-                            )
+                            if recoveries <= 3:
+                                self.store.update_plan(
+                                    row["id"],
+                                    status="approved",
+                                    attempts=0,
+                                    context=context,
+                                )
+                                self.store.event(
+                                    row["id"],
+                                    "project_internal_failure_recovery",
+                                    f"{recoveries}: "
+                                    + str(failure.get("error", ""))[:1100],
+                                )
+                            else:
+                                self.store.update_plan(
+                                    row["id"],
+                                    status="cancelled",
+                                    result=(
+                                        "Qwen and Codex repeatedly hit the same internal "
+                                        "failure and stopped without requiring an owner "
+                                        "decision."
+                                    ),
+                                    context=context,
+                                )
+                                self.store.event(
+                                    row["id"],
+                                    "project_internal_recovery_exhausted",
+                                    str(failure.get("error", ""))[:1200],
+                                )
                         else:
                             self.store.create_deviation(
                                 row["id"],
