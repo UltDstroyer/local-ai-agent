@@ -399,6 +399,46 @@ def critical_remote_exec_reason(command: str) -> str | None:
     return None
 
 
+def sensitive_remote_read_path(path: str) -> bool:
+    """Identify persistent secret-bearing files that must stay out of agent context."""
+    value = str(path or "").replace("\\", "/").lower()
+    if not value.startswith("/"):
+        return False
+    basename = value.rsplit("/", 1)[-1]
+    if value in {"/etc/shadow", "/etc/gshadow"}:
+        return True
+    if basename in {
+        ".env",
+        ".netrc",
+        ".pypirc",
+        "id_rsa",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+        "credentials.json",
+        "credentials",
+        "secrets.json",
+        "secrets",
+    }:
+        return True
+    if basename.endswith((".key", ".p12", ".pfx")):
+        return True
+    if any(value.startswith(root) for root in (
+        "/etc/cloudflared/",
+        "/root/.cloudflared/",
+        "/etc/wireguard/",
+        "/etc/ssl/private/",
+    )):
+        return True
+    if "/.cloudflared/" in value:
+        return True
+    if "/.ssh/" in value and basename not in {
+        "authorized_keys", "known_hosts", "config"
+    }:
+        return True
+    return False
+
+
 def validate_remote_action(
     action: object,
     budget: RemoteBudget,
@@ -414,6 +454,12 @@ def validate_remote_action(
 
     if op == "read_file":
         path = _absolute_remote_pattern(action.get("path", ""))
+        if sensitive_remote_read_path(path):
+            raise RemoteContractError(
+                "persistent secret content may not be read into agent context; "
+                "use path_exists or a service reference, or request one ephemeral "
+                "human input if the value itself is required"
+            )
         if not remote_path_matches(path, budget.allowed_read_paths):
             raise RemoteContractError(f"read outside remote scope: {path}")
         result["path"] = path
