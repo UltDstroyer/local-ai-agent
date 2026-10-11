@@ -548,11 +548,19 @@ Persistent admin context:
 Available human-input keys:
 {json.dumps(list((row.get("context", {}) or {}).get("available_inputs", [])))}
 
+Expired human-input keys that must be requested again if still needed:
+{json.dumps(list((row.get("context", {}) or {}).get("expired_inputs", [])))}
+
 If an available human input is needed in an action, reference it only as
 {{{{input:KEY}}}}. Never ask to see or repeat the actual value.
 
+If you genuinely need one human-only value before any action can proceed, set
+input_request to one object with key, prompt, reason, and sensitive, and return
+an empty actions list. Never ask the owner for system state you can inspect.
+
 Return JSON only:
 {{
+  "input_request": null,
   "actions": [
     {{"op": "read_file", "path": "/approved/path"}},
     {{"op": "write_file", "path": "/approved/path", "content": "...", "mode": "0644"}},
@@ -658,6 +666,71 @@ def _normalize_human_input_request(input_request: object) -> dict | None:
         "reason": reason_text,
         "sensitive": sensitive,
     }
+
+
+def _manager_human_input_review(
+    settings,
+    plan: RemotePlan,
+    milestone: str,
+    input_request: dict,
+    inspection: str,
+    mode: str,
+) -> dict:
+    """Qwen verifies Codex really needs one human-only input."""
+    prompt = f"""You are Qwen, the manager. Codex says it cannot continue without
+one human-only input. Decide whether the boss truly must provide it.
+
+Goal: {plan.goal}
+Milestone: {milestone}
+Requested input: {json.dumps(input_request)}
+Fresh inspection: {inspection[:14000]}
+
+A valid human-only input is something the machine cannot safely discover itself,
+such as a password, token, account choice, private credential, or subjective
+owner preference. Service state, configuration state, logs, command output,
+paths, package presence, and other observable machine facts are NOT valid boss
+inputs.
+
+Return JSON only:
+{{
+  "needed": true,
+  "reason": "why the boss is or is not required",
+  "guidance": "what Codex should do instead if not needed"
+}}
+"""
+    try:
+        value = _ask_json_object(
+            settings,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Return strict JSON only. Protect the boss from questions "
+                        "Qwen and Codex can answer themselves."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "balanced" if mode == "quiet" else mode,
+            num_predict=768,
+            num_ctx=6144,
+        )
+        return {
+            "needed": value.get("needed") is True,
+            "reason": str(value.get("reason", "")).strip()[:1600],
+            "guidance": str(value.get("guidance", "")).strip()[:2400],
+            "internal_error": False,
+        }
+    except Exception as exc:
+        return {
+            "needed": False,
+            "reason": "manager human-input review failed: " + str(exc)[:1000],
+            "guidance": (
+                "Retry the internal human-input necessity review before asking "
+                "the owner."
+            ),
+            "internal_error": True,
+        }
 
 
 def _codex_manager_checkin_remote(
@@ -1925,10 +1998,83 @@ def run_remote_plan_step(
     if codex.get("thread_id"):
         remote_store.update_plan(plan.id, codex_thread=codex["thread_id"])
     proposal = _json_object(codex.get("message", ""))
+    context = dict(row.get("context", {}))
+
+    raw_input_request = proposal.get("input_request")
+    if raw_input_request is not None:
+        try:
+            input_request = _normalize_human_input_request(raw_input_request)
+        except ValueError as exc:
+            context["next_guidance"] = (
+                "Qwen manager correction: the human-input request is malformed or "
+                "asks for inspectable system state. Fix it internally and do not "
+                "involve the owner. " + str(exc)
+            )[:3000]
+            remote_store.update_plan(
+                plan.id,
+                status="approved",
+                attempts=0,
+                context=context,
+            )
+            remote_store.event(
+                plan.id,
+                "remote_manager_rejected_invalid_input_request",
+                str(exc)[:1200],
+            )
+            return
+
+        input_review = _manager_human_input_review(
+            settings,
+            plan,
+            plan.milestones[index],
+            input_request,
+            inspection.get("output", ""),
+            mode,
+        )
+        remote_store.event(
+            plan.id,
+            "remote_manager_human_input_review",
+            json.dumps({
+                "needed": input_review.get("needed"),
+                "internal_error": input_review.get("internal_error"),
+                "reason": input_review.get("reason", ""),
+            })[:1600],
+        )
+        if input_review.get("internal_error") or not input_review.get("needed"):
+            context["next_guidance"] = (
+                input_review.get("guidance")
+                or "Continue without owner input and inspect the required state directly."
+            )[:3000]
+            remote_store.update_plan(
+                plan.id,
+                status="approved",
+                attempts=0,
+                context=context,
+            )
+            return
+
+        remote_store.create_deviation(
+            plan.id,
+            plan.target,
+            "Qwen and Codex need one human-only input",
+            {
+                "type": "human_input",
+                "milestone": plan.milestones[index],
+                "reason": input_review.get("reason", input_request["reason"]),
+                "boss_request": (
+                    "Allow me to ask you for one human-only input needed for this step."
+                ),
+                "risk": "low" if not input_request["sensitive"] else "medium",
+                "input_request": input_request,
+                "suggested_action": (
+                    "Provide only this one value; it will remain ephemeral."
+                ),
+            },
+        )
+        return
+
     actions = proposal.get("actions")
     proposal_error = _remote_actions_error(actions)
-
-    context = dict(row.get("context", {}))
     if proposal_error:
         attempts = int(row["attempts"]) + 1
         context["next_guidance"] = (
@@ -3025,6 +3171,8 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
     resume_only_types = {
         "manager_escalation",
         "human_access",
+        "human_input",
+        "human_input_refresh",
     }
     if request_type not in action_types | resume_only_types:
         raise RemoteOrchestrationError(
