@@ -463,11 +463,18 @@ Return:
   "state": "complete" | "continue" | "blocked",
   "guidance": "short instruction to Codex for the next attempt",
   "context_note": "durable summary for later milestones",
-  "reason": "why"
+  "reason": "why",
+  "owner_needed": false,
+  "owner_request": "",
+  "risk": "low|medium|high"
 }}
 
 Use complete only when the milestone is actually satisfied. Prefer guidance
-within the approved lease. Do not authorize scope expansion yourself."""
+within the approved lease. Technical diagnosis, implementation choices, and
+ordinary retries stay between you and Codex. Set owner_needed=true only when a
+new owner decision, permission, credential, destructive choice, or authority
+expansion is genuinely required. If true, owner_request must be exactly one
+concrete decision. Never bundle multiple issues into one boss request."""
     try:
         response = ask(
             settings,
@@ -482,6 +489,12 @@ within the approved lease. Do not authorize scope expansion yourself."""
         value = _json_object(str(response.get("content", "")))
         if value.get("state") not in ("complete", "continue", "blocked"):
             raise ContractError("bad review state")
+        value["owner_needed"] = value.get("owner_needed") is True
+        value["owner_request"] = str(value.get("owner_request", "")).strip()[:500]
+        risk = str(value.get("risk", "medium")).lower()
+        value["risk"] = risk if risk in ("low", "medium", "high") else "medium"
+        if value["owner_needed"] and not value["owner_request"]:
+            raise ContractError("owner_needed requires one concrete owner_request")
         return value
     except (RuntimeError, ContractError, json.JSONDecodeError):
         return {
@@ -489,6 +502,9 @@ within the approved lease. Do not authorize scope expansion yourself."""
             "guidance": "Re-check the milestone, tests, and actual diff; finish only approved work.",
             "context_note": "",
             "reason": "administrator review was inconclusive",
+            "owner_needed": False,
+            "owner_request": "",
+            "risk": "medium",
         }
 
 
@@ -737,21 +753,40 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
         return
 
     attempts = int(row["attempts"]) + 1
-    if review["state"] == "blocked" or attempts >= plan.budget.max_attempts_per_milestone:
+    if review.get("owner_needed") is True:
+        request = {
+            "type": "manager_escalation",
+            "milestone": plan.milestones[index],
+            "attempts": attempts,
+            "reason": review.get("reason", ""),
+            "boss_request": review.get("owner_request", ""),
+            "risk": review.get("risk", "medium"),
+            "suggested_action": review.get("guidance", ""),
+        }
+        store.create_deviation(
+            plan.id, plan.project,
+            "Qwen requests one owner decision",
+            request,
+        )
+    elif attempts >= plan.budget.max_attempts_per_milestone:
         request = {
             "type": "stalled",
             "milestone": plan.milestones[index],
             "attempts": attempts,
             "reason": review.get("reason", ""),
-            "codex_summary": reply.get("message", "")[:4000],
+            "boss_request": (
+                "Allow Qwen and Codex another bounded recovery cycle for this milestone."
+            ),
+            "risk": "low",
             "suggested_action": review.get("guidance", ""),
         }
         store.create_deviation(
             plan.id, plan.project,
-            f"Milestone {index + 1} needs owner attention",
+            "Qwen exhausted the recovery budget",
             request,
         )
     else:
+        updated_context["next_guidance"] = str(review.get("guidance", ""))[:3000]
         store.update_plan(
             plan.id,
             status="approved",
