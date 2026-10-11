@@ -228,6 +228,12 @@ class RemoteStore:
             )
             if cur.rowcount != 1:
                 raise ValueError("no such remote plan")
+            if fields.get("status") in ("completed", "cancelled", "rejected"):
+                self.db.execute(
+                    "UPDATE remote_deviations SET status='superseded',updated=? "
+                    "WHERE plan=? AND status='pending'",
+                    (time.time(), pid),
+                )
 
     def approve_plan(self, pid: str) -> bool:
         with self.lock, self.db:
