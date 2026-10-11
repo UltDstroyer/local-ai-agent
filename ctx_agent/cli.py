@@ -394,6 +394,30 @@ def main(argv=None):
             else:
                 result = call(args.socket, data, timeout=timeout)
 
+        if (
+            args.action == "remote-deviation-approve"
+            and isinstance(result.get("input_request"), dict)
+        ):
+            req = result["input_request"]
+            supplied = _prompt_human_input(req)
+            if not supplied:
+                raise ValueError("input cannot be empty")
+            result = call(
+                args.socket,
+                {
+                    "op": "remote_input_submit",
+                    "id": result.get("deviation", ""),
+                    "key": req.get("key", ""),
+                    "value": supplied,
+                },
+                timeout=900,
+            )
+            print(
+                "[Qwen manager] received the input; its value is not stored in logs.",
+                file=sys.stderr,
+                flush=True,
+            )
+
         if args.action in (
             "plan-approve",
             "remote-plan-approve",
