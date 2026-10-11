@@ -510,7 +510,7 @@ class Coordinator:
         if op in (
             "remote_plan_show", "remote_plan_approve",
             "remote_plan_reject", "remote_plan_cancel",
-            "remote_plan_events",
+            "remote_plan_retry_internal", "remote_plan_events",
         ):
             target_name = data.get("target", "")
             pid = data.get("id", "")
@@ -542,6 +542,17 @@ class Coordinator:
                         "Remote plan is not awaiting initial approval"
                     )
                 self.remote_inputs.pop(row["id"], None)
+                return {
+                    "plan": self._remote_plan_view(
+                        self.remote_store.get_plan(row["id"])
+                    )
+                }
+            if op == "remote_plan_retry_internal":
+                with self.execution_lock:
+                    if not self.remote_store.retry_internal_plan(row["id"]):
+                        raise ValueError(
+                            "Remote plan is not an internally failed/recoverable plan"
+                        )
                 return {
                     "plan": self._remote_plan_view(
                         self.remote_store.get_plan(row["id"])
@@ -771,7 +782,7 @@ class Coordinator:
             raise ValueError("No planning task or plan for project")
         if op in (
             "plan_show", "plan_approve", "plan_reject", "plan_cancel",
-            "plan_diff", "plan_apply",
+            "plan_retry_internal", "plan_diff", "plan_apply",
         ):
             project = data.get("project", "")
             source = self.project(project)
@@ -791,6 +802,13 @@ class Coordinator:
             if op == "plan_reject":
                 if not self.store.reject_plan(pid):
                     raise ValueError("Plan is not awaiting approval")
+                return {"plan": self._plan_view(self.store.get_plan(pid))}
+            if op == "plan_retry_internal":
+                with self.execution_lock:
+                    if not self.store.retry_internal_plan(pid):
+                        raise ValueError(
+                            "Plan is not an internally failed/recoverable plan"
+                        )
                 return {"plan": self._plan_view(self.store.get_plan(pid))}
             if op == "plan_cancel":
                 with self.execution_lock:
