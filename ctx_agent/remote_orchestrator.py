@@ -612,6 +612,7 @@ If a required dependency is absent, dependency_request must be exactly one objec
 {{
   "kind": "package" | "service",
   "name": "exact package or service name",
+  "action": "start|restart|enable|enable_now for services, empty for packages",
   "reason": "why this dependency is required for the current milestone"
 }}
 
@@ -677,13 +678,25 @@ Rules:
             kind = str(dependency.get("kind", "")).strip()
             name = str(dependency.get("name", "")).strip()
             reason = str(dependency.get("reason", "")).strip()
-            if kind not in ("package", "service") or not name or not reason:
+            service_action = str(dependency.get("action", "")).strip()
+            if (
+                kind not in ("package", "service")
+                or not name
+                or not reason
+                or (
+                    kind == "service"
+                    and service_action not in (
+                        "start", "restart", "enable", "enable_now"
+                    )
+                )
+            ):
                 invalid_dependency = True
                 dependency = None
             else:
                 dependency = {
                     "kind": kind,
                     "name": name[:160],
+                    "action": service_action if kind == "service" else "",
                     "reason": reason[:1200],
                 }
                 value["owner_needed"] = True
@@ -1256,7 +1269,14 @@ def _dependency_request_from_checkin(
         request["milestone"] = plan.milestones[0] if plan.milestones else plan.goal
         return request
     if kind == "service" and name and reason:
-        action = {"op": "service", "service": name, "action": "enable_now"}
+        service_action = str(dependency.get("action", "")).strip()
+        if service_action not in ("start", "restart", "enable", "enable_now"):
+            return None
+        action = {
+            "op": "service",
+            "service": name,
+            "action": service_action,
+        }
         request = _dependency_owner_request(
             plan,
             action,
@@ -1753,6 +1773,10 @@ def run_remote_plan_step(
                     )
                 return
             if not dependency_review.get("needed"):
+                disagreements = int(
+                    context.get("dependency_disagreement_cycles", 0)
+                ) + 1
+                context["dependency_disagreement_cycles"] = disagreements
                 context["next_guidance"] = (
                     dependency_review.get("guidance")
                     or "Choose an approach that stays inside existing authority."
@@ -1763,14 +1787,31 @@ def run_remote_plan_step(
                         "milestone": index,
                         "dependency_rejected_by_manager": dependency_key,
                         "reason": dependency_review.get("reason", ""),
+                        "disagreement_cycle": disagreements,
                     },
                 )
-                remote_store.update_plan(
-                    plan.id,
-                    status="approved",
-                    attempts=0,
-                    context=context,
-                )
+                if disagreements <= 3:
+                    remote_store.update_plan(
+                        plan.id,
+                        status="approved",
+                        attempts=0,
+                        context=context,
+                    )
+                else:
+                    remote_store.update_plan(
+                        plan.id,
+                        status="cancelled",
+                        context=context,
+                        result=(
+                            "Codex and Qwen repeatedly disagreed on the necessity "
+                            "of a new dependency without converging on a boss decision."
+                        ),
+                    )
+                    remote_store.event(
+                        plan.id,
+                        "remote_dependency_disagreement_exhausted",
+                        dependency_key,
+                    )
                 return
             request = _dependency_owner_request(
                 plan,
