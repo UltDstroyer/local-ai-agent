@@ -619,8 +619,10 @@ class Coordinator:
         if op == "remote_deviation_list":
             self._retire_invalid_remote_deviations()
             return {
-                "deviations": self.remote_store.list_deviations(
-                    target=data.get("target") or None
+                "deviations": self._public_deviations(
+                    self.remote_store.list_deviations(
+                        target=data.get("target") or None
+                    )
                 )
             }
         if op in (
@@ -738,7 +740,12 @@ class Coordinator:
             return {"plan": self._plan_view(row)}
         if op == "plan_list":
             project = data.get("project") or None
-            return {"plans": self.store.list_plans(project=project)}
+            return {
+                "plans": [
+                    self._plan_view(row)
+                    for row in self.store.list_plans(project=project)
+                ]
+            }
         if op == "plan_progress":
             project = data.get("project", "")
             active = self._planning_view("project_plan", project)
@@ -826,8 +833,10 @@ class Coordinator:
         if op == "deviation_list":
             self._retire_invalid_local_deviations()
             return {
-                "deviations": self.store.list_deviations(
-                    project=data.get("project") or None
+                "deviations": self._public_deviations(
+                    self.store.list_deviations(
+                        project=data.get("project") or None
+                    )
                 )
             }
         if op in ("deviation_show", "deviation_approve", "deviation_reject"):
