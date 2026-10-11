@@ -888,11 +888,10 @@ class RemoteWorkerEscalationBoundaryTests(unittest.TestCase):
             .joinpath("ctx_agent", "server.py")
             .read_text()
         )
-        self.assertIn(
-            'if failure["type"] in ("action_format", "codex_format")',
-            source,
-        )
+        self.assertIn('"action_format"', source)
+        self.assertIn('"codex_format"', source)
         self.assertIn("remote_internal_format_recovery", source)
+        self.assertIn("remote_unclassified_internal_failure", source)
 
 
 class BossManagerEmployeeInvariantTests(unittest.TestCase):
