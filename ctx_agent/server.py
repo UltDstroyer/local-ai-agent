@@ -758,12 +758,32 @@ class Coordinator:
                     current = self.remote_store.get_plan(row["id"])
                     if current and current["status"] == "running":
                         failure = classify_remote_error(exc)
-                        self.remote_store.create_deviation(
-                            row["id"],
-                            row["target"],
-                            "Remote autonomous step stopped: " + failure["type"],
-                            failure,
-                        )
+                        if failure["type"] in ("action_format", "codex_format"):
+                            context = dict(current.get("context", {}))
+                            context["next_guidance"] = (
+                                "Qwen manager correction: this is an internal formatting "
+                                "or schema problem, not an owner decision. Repair the "
+                                "typed action/dependency/input shape and retry. "
+                                + str(failure.get("error", ""))[:1800]
+                            )
+                            self.remote_store.update_plan(
+                                row["id"],
+                                status="approved",
+                                attempts=0,
+                                context=context,
+                            )
+                            self.remote_store.event(
+                                row["id"],
+                                "remote_internal_format_recovery",
+                                str(failure.get("error", ""))[:1200],
+                            )
+                        else:
+                            self.remote_store.create_deviation(
+                                row["id"],
+                                row["target"],
+                                "Remote autonomous step stopped: " + failure["type"],
+                                failure,
+                            )
             except Exception:
                 self.shutdown.wait(1)
 
