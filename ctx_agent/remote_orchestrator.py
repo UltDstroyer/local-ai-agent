@@ -642,8 +642,13 @@ Return JSON only:
   "why_different": "how this avoids the previous failure",
   "owner_needed": false,
   "owner_request": "",
-  "risk": "low|medium|high"
-}}"""
+  "risk": "low|medium|high",
+  "input_request": null
+}}
+
+If one human-only input is required for the new strategy, input_request must
+contain exactly key, prompt, reason, and sensitive. Ask for only one value.
+Never include or infer the value itself."""
     return _ask_json_object(
         settings,
         [
@@ -1295,6 +1300,7 @@ def run_remote_plan_step(
                         "reason": str(replan.get("why_different", ""))[:2000],
                         "boss_request": str(replan.get("owner_request", ""))[:500],
                         "risk": str(replan.get("risk", "medium"))[:16],
+                        "input_request": replan.get("input_request"),
                         "suggested_action": context["next_guidance"],
                     },
                 )
