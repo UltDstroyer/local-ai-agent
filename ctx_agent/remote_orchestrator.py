@@ -1512,15 +1512,26 @@ def _review_checkin_dependency(
 
 
 def _dependency_key(action: dict) -> str | None:
+    if not isinstance(action, dict):
+        return None
     op = action.get("op")
     if op == "package_install":
-        packages = sorted(str(x) for x in action.get("packages", []) if str(x))
-        return "packages:" + ",".join(packages) if packages else None
+        packages = action.get("packages")
+        if (
+            not isinstance(packages, list)
+            or not packages
+            or any(not isinstance(item, str) or not item.strip() for item in packages)
+        ):
+            return None
+        normalized = sorted(item.strip() for item in packages)
+        return "packages:" + ",".join(normalized)
     if op == "service" and action.get("action") in (
         "start", "restart", "enable", "enable_now"
     ):
-        service = str(action.get("service", "")).strip()
-        return "service:" + canonical_service_name(service) if service else None
+        service = action.get("service")
+        if not isinstance(service, str) or not service.strip():
+            return None
+        return "service:" + canonical_service_name(service.strip())
     return None
 
 
