@@ -316,6 +316,40 @@ class RemotePlan:
         }
 
 
+def remote_exec_secret_exposure_reason(command: str) -> str | None:
+    """Reject commands likely to print persistent secrets into agent-visible output."""
+    if not isinstance(command, str):
+        return None
+    lower = " ".join(command.lower().split())
+    if re.search(r"(?:^|[;&|]\s*)(?:printenv|env)(?:\s*$|\s*[|;&])", lower):
+        return "environment dump may expose persistent secrets"
+    if re.search(r"/proc/(?:self|\d+)/environ", lower):
+        return "process environment dump may expose persistent secrets"
+
+    sensitive_markers = (
+        "/etc/shadow",
+        "/etc/gshadow",
+        "/etc/cloudflared/",
+        "/.cloudflared/",
+        "/etc/wireguard/",
+        "/etc/ssl/private/",
+        "/.ssh/id_rsa",
+        "/.ssh/id_dsa",
+        "/.ssh/id_ecdsa",
+        "/.ssh/id_ed25519",
+        "/.env",
+    )
+    output_tools = (
+        "cat ", "tac ", "head ", "tail ", "less ", "more ", "grep ",
+        "sed ", "awk ", "strings ", "xxd ", "base64 ",
+    )
+    if any(marker in lower for marker in sensitive_markers) and any(
+        tool in lower for tool in output_tools
+    ):
+        return "command would expose persistent secret content to agent output"
+    return None
+
+
 def critical_remote_exec_reason(command: str) -> str | None:
     """Return a short reason when arbitrary SSH execution crosses a critical boundary."""
     if not isinstance(command, str):
@@ -535,6 +569,12 @@ def validate_remote_action(
             or len(command.encode()) > 50_000
         ):
             raise RemoteContractError("invalid remote command")
+        secret_reason = remote_exec_secret_exposure_reason(command)
+        if secret_reason:
+            raise RemoteContractError(
+                secret_reason
+                + "; use metadata/existence checks or one ephemeral human input instead"
+            )
         if type(as_root) is not bool:
             raise RemoteContractError("remote_exec as_root must be boolean")
         if as_root and not budget.allow_sudo:
