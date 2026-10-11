@@ -236,7 +236,7 @@ def plan_snapshot(
     elif status == "ready_for_review":
         phase = "ready_for_owner_review"
         waiting_on = "owner_final_review"
-    elif status in ("completed", "cancelled", "rejected"):
+    elif status in ("completed", "cancelled", "rejected", "failed_internal"):
         phase = status
         remaining_work = 0
         eta_available = status == "completed"
