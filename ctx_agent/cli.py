@@ -136,6 +136,15 @@ def _print_deviation_summary(result):
     if not deviations:
         print("No deviations.")
         return
+    pending = [
+        deviation for deviation in deviations
+        if isinstance(deviation, dict) and deviation.get("status") == "pending"
+    ]
+    if pending:
+        deviations = pending
+    else:
+        print("No pending deviations.")
+        return
     for index, deviation in enumerate(deviations):
         if not isinstance(deviation, dict):
             continue
@@ -151,6 +160,14 @@ def _print_deviation_summary(result):
             print("Risk:", risk)
         if recommendation:
             print("Recommendation:", recommendation)
+
+
+def _progress_bar(percent, width=24):
+    if not isinstance(percent, int):
+        return "[" + "?" * width + "]"
+    percent = max(0, min(100, percent))
+    filled = round(width * percent / 100)
+    return "[" + "#" * filled + "-" * (width - filled) + "]"
 
 
 def _duration(seconds):
@@ -190,39 +207,65 @@ def _progress_line(progress):
 
 
 def _print_progress_report(progress):
-    print(f"Phase: {progress.get('phase', 'unknown')}")
+    percent = progress.get("percent_complete")
+    phase = str(progress.get("phase", "unknown")).replace("_", " ")
+    if isinstance(percent, int):
+        print(f"{_progress_bar(percent)} {percent}%  {phase}")
+    else:
+        print(f"{_progress_bar(None)}  {phase}")
+
     if progress.get("current_stage_name"):
         index = progress.get("current_stage_index")
         count = progress.get("stage_count")
-        position = f"{index}/{count} " if index and count else ""
-        print(f"Current stage: {position}{progress['current_stage_name']}")
-    if isinstance(progress.get("percent_complete"), int):
-        print(f"Progress: {progress['percent_complete']}%")
-    print(f"Elapsed: {_duration(progress.get('elapsed_seconds'))}")
+        position = f"{index}/{count}" if index and count else "?"
+        print(
+            f"Stage {position}: "
+            f"{_short(progress['current_stage_name'], 120)}"
+        )
+
+    elapsed = _duration(progress.get("elapsed_seconds"))
     remaining = progress.get("estimated_remaining_seconds")
     work = progress.get("estimated_work_remaining_seconds")
     if remaining is not None:
-        print(f"Estimated time left: ~{_duration(remaining)}")
+        print(f"Elapsed {elapsed} | ETA ~{_duration(remaining)}")
     elif work is not None:
-        print(f"Estimated work left: ~{_duration(work)}")
-    if progress.get("waiting_on"):
-        print("Waiting on:", progress["waiting_on"].replace("_", " "))
+        print(f"Elapsed {elapsed} | Work left ~{_duration(work)}")
+    else:
+        print(f"Elapsed {elapsed}")
+
+    waiting = progress.get("waiting_on")
+    if waiting:
+        readable = waiting.replace("_", " ")
+        print(f"Waiting: {readable}")
+        if waiting in ("owner_approval", "owner_deviation_decision"):
+            print("Action: ctx agent approve   or   ctx agent reject")
+
     stages = progress.get("stages") or progress.get("planning_stages") or []
     if stages:
         print("Stages:")
-        labels = {"complete": "done", "running": "active", "queued": "queued", "pending": "pending"}
+        symbols = {
+            "complete": "[x]",
+            "running": "[>]",
+            "queued": "[>]",
+            "pending": "[ ]",
+        }
         for stage in stages:
-            status = labels.get(stage.get("status"), stage.get("status", "pending"))
+            status = stage.get("status", "pending")
+            marker = symbols.get(status, "[ ]")
             estimate = stage.get("estimated_seconds")
-            suffix = f" (~{_duration(estimate)})" if estimate is not None else ""
-            print(f"  [{status}] {stage.get('index')}. {_short(stage.get('name'), 120)}{suffix}")
+            suffix = f"  ~{_duration(estimate)}" if estimate is not None else ""
+            print(
+                f"  {marker} {stage.get('index')}. "
+                f"{_short(stage.get('name'), 96)}{suffix}"
+            )
+
     planned = progress.get("planned_execution_stages") or []
-    if planned and not progress.get("stages"):
-        print("Planned execution stages:")
+    if planned and not stages:
+        print("Planned stages:")
         for index, name in enumerate(planned, 1):
-            print(f"  {index}. {_short(name, 120)}")
-    if progress.get("estimate_note"):
-        print("Estimate:", progress["estimate_note"])
+            print(f"  [ ] {index}. {_short(name, 96)}")
+
+
 
 
 def _call_with_progress(path, payload, progress_payload, timeout):
@@ -437,6 +480,7 @@ def main(argv=None):
             "plan-create", "plan-show", "plan-approve", "plan-reject",
             "plan-cancel", "remote-plan-create", "remote-plan-show",
             "remote-plan-approve", "remote-plan-reject", "remote-plan-cancel",
+            "deviation-approve", "deviation-reject",
             "remote-deviation-approve", "remote-deviation-reject",
         ):
             _print_plan_summary(result)
