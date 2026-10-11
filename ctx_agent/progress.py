@@ -253,14 +253,27 @@ def plan_snapshot(
     elif status == "awaiting_deviation":
         current_name = "Owner deviation decision"
 
-    in_progress_weight = 0
-    if active_index is not None and status == "running" and active_index < len(rendered):
-        in_progress_weight = min(
-            rendered[active_index]["estimated_seconds"],
-            stage_elapsed,
-        )
-    denominator = max(1, total_work)
-    percent = min(100, int(round((completed_weight + in_progress_weight) * 100 / denominator)))
+    # Percentage is deliberately separate from ETA. Dynamic ETA estimates
+    # grow when a stage takes longer than expected; using those moving values
+    # for completion made progress regress (for example 70% -> 63%) when a
+    # worker cycle returned to the queued/manager-review state. Use fixed
+    # stage weights and stable half-credit for the active stage instead.
+    progress_weights = [_stage_estimate(name, remote) for name in names]
+    progress_total = max(1, sum(progress_weights))
+    progress_done = 0.0
+    for i, weight in enumerate(progress_weights):
+        if i < current:
+            progress_done += weight
+        elif i == len(progress_weights) - 1 and final_complete:
+            progress_done += weight
+    if (
+        active_index is not None
+        and active_index < len(progress_weights)
+        and status in ("approved", "running", "awaiting_deviation")
+        and active_index >= current
+    ):
+        progress_done += progress_weights[active_index] * 0.5
+    percent = min(100, int(round(progress_done * 100 / progress_total)))
     if status == "completed":
         percent = 100
 
