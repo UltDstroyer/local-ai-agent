@@ -16,15 +16,18 @@ from .contracts import ContractError, Plan, analyze_changes, contract_violations
 from .orchestrator import (
     OrchestrationError,
     approve_deviation,
+    auto_approve_low_risk_deviation,
     create_negotiated_plan,
     ensure_workspace,
     reject_deviation,
     run_plan_step,
+    summarize_deviation,
 )
 from .remote import RemoteContractError, RemoteTarget
 from .remote_orchestrator import (
     RemoteOrchestrationError,
     approve_remote_deviation,
+    auto_approve_low_risk_remote_deviation,
     create_remote_plan,
     inspect_target,
     reject_remote_deviation,
@@ -229,6 +232,42 @@ class Coordinator:
                 + (f" ({scope})" if scope else "")
                 + "; finish or cancel it before creating a new plan"
             )
+
+
+    def _maybe_auto_approve_local_deviation(self, row: dict, source: Path):
+        current = self.store.get_plan(row["id"])
+        if not current or current.get("status") != "awaiting_deviation":
+            return False
+        pending = [
+            item for item in self.store.list_deviations(plan=row["id"])
+            if item.get("status") == "pending"
+        ]
+        if len(pending) != 1:
+            return False
+        return auto_approve_low_risk_deviation(
+            self.settings,
+            self.store,
+            source,
+            pending[0]["id"],
+            self.mode,
+        )
+
+    def _maybe_auto_approve_remote_deviation(self, row: dict):
+        current = self.remote_store.get_plan(row["id"])
+        if not current or current.get("status") != "awaiting_deviation":
+            return False
+        pending = [
+            item for item in self.remote_store.list_deviations(plan=row["id"])
+            if item.get("status") == "pending"
+        ]
+        if len(pending) != 1:
+            return False
+        return auto_approve_low_risk_remote_deviation(
+            self.settings,
+            self.remote_store,
+            pending[0]["id"],
+            self.mode,
+        )
 
 
     def dispatch(self, data: dict):
@@ -621,11 +660,15 @@ class Coordinator:
             return {"applied": applied, "plan": self.store.get_plan(pid)}
 
         if op == "deviation_list":
-            return {
-                "deviations": self.store.list_deviations(
-                    project=data.get("project") or None
-                )
-            }
+            deviations = self.store.list_deviations(
+                project=data.get("project") or None
+            )
+            for deviation in deviations:
+                if deviation.get("status") == "pending":
+                    deviation["owner_summary"] = summarize_deviation(
+                        self.settings, deviation, self.mode
+                    )
+            return {"deviations": deviations}
         if op in ("deviation_show", "deviation_approve", "deviation_reject"):
             did = data.get("id", "")
             if not isinstance(did, str) or len(did) != 12 or not did.isalnum():
@@ -634,6 +677,9 @@ class Coordinator:
             if not deviation:
                 raise ValueError("No such deviation")
             if op == "deviation_show":
+                deviation["owner_summary"] = summarize_deviation(
+                    self.settings, deviation, self.mode
+                )
                 return {"deviation": deviation}
             source = self.project(deviation["project"])
             if op == "deviation_approve":
@@ -738,10 +784,11 @@ class Coordinator:
                             row,
                             self.mode,
                         )
+                        self._maybe_auto_approve_remote_deviation(row)
                 except Exception as exc:
                     current = self.remote_store.get_plan(row["id"])
                     if current and current["status"] == "running":
-                        self.remote_store.create_deviation(
+                        did = self.remote_store.create_deviation(
                             row["id"],
                             row["target"],
                             "Remote autonomous step stopped by a system/tool error",
@@ -753,6 +800,12 @@ class Coordinator:
                                     "then approve to retry."
                                 ),
                             },
+                        )
+                        auto_approve_low_risk_remote_deviation(
+                            self.settings,
+                            self.remote_store,
+                            did,
+                            self.mode,
                         )
             except Exception:
                 self.shutdown.wait(1)
@@ -775,6 +828,7 @@ class Coordinator:
                         run_plan_step(
                             self.settings, self.store, source, row, self.mode
                         )
+                        self._maybe_auto_approve_local_deviation(row, source)
                 except Exception as exc:
                     current = self.store.get_plan(row["id"])
                     if current and current["status"] == "running":
@@ -786,11 +840,18 @@ class Coordinator:
                                 "then approve to retry."
                             ),
                         }
-                        self.store.create_deviation(
+                        did = self.store.create_deviation(
                             row["id"],
                             row["project"],
                             "Autonomous step stopped by a system/tool error",
                             request,
+                        )
+                        auto_approve_low_risk_deviation(
+                            self.settings,
+                            self.store,
+                            source,
+                            did,
+                            self.mode,
                         )
             except Exception:
                 self.shutdown.wait(1)
