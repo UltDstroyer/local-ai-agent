@@ -2924,25 +2924,45 @@ def run_remote_plan_step(
                 replan.get("owner_needed") is True
                 and checkin.get("owner_needed") is True
             ):
-                remote_store.create_deviation(
-                    plan.id,
-                    plan.target,
-                    "Qwen and Codex need one owner decision",
-                    {
-                        "type": "manager_escalation",
-                        "milestone": plan.milestones[index],
-                        "reason": str(replan.get("why_different", ""))[:2000],
-                        "boss_request": str(
-                            checkin.get("owner_request")
-                            or replan.get("owner_request", "")
-                        )[:500],
-                        "risk": str(
-                            checkin.get("risk", replan.get("risk", "medium"))
-                        )[:16],
-                        "input_request": replan.get("input_request"),
-                        "suggested_action": context["next_guidance"],
-                    },
-                )
+                owner_request = {
+                    "type": "manager_escalation",
+                    "milestone": plan.milestones[index],
+                    "reason": str(replan.get("why_different", ""))[:2000],
+                    "boss_request": str(
+                        checkin.get("owner_request")
+                        or replan.get("owner_request", "")
+                    )[:500],
+                    "risk": str(
+                        checkin.get("risk", replan.get("risk", "medium"))
+                    )[:16],
+                    "input_request": replan.get("input_request"),
+                    "suggested_action": context["next_guidance"],
+                }
+                if valid_remote_owner_request(owner_request):
+                    remote_store.create_deviation(
+                        plan.id,
+                        plan.target,
+                        "Qwen and Codex need one owner decision",
+                        owner_request,
+                    )
+                else:
+                    context["next_guidance"] = (
+                        "Governance rejected the proposed boss escalation as an "
+                        "internal/underspecified issue. Qwen and Codex must resolve "
+                        "it internally or formulate one concrete authority decision."
+                    )
+                    remote_store.update_plan(
+                        plan.id,
+                        status="approved",
+                        attempts=0,
+                        codex_thread="",
+                        context=context,
+                    )
+                    remote_store.event(
+                        plan.id,
+                        "remote_invalid_escalation_blocked",
+                        str(owner_request.get("boss_request", ""))[:1000],
+                    )
             else:
                 remote_store.update_plan(
                     plan.id,
@@ -3104,20 +3124,40 @@ def run_remote_plan_step(
 
     attempts = int(row["attempts"]) + 1
     if review.get("owner_needed") is True:
-        remote_store.create_deviation(
-            plan.id,
-            plan.target,
-            "Qwen requests one owner decision",
-            {
-                "type": "manager_escalation",
-                "milestone": plan.milestones[index],
-                "reason": review.get("reason", ""),
-                "boss_request": review.get("owner_request", ""),
-                "risk": review.get("risk", "medium"),
-                "input_request": review.get("input_request"),
-                "suggested_action": review.get("guidance", ""),
-            },
-        )
+        owner_request = {
+            "type": "manager_escalation",
+            "milestone": plan.milestones[index],
+            "reason": review.get("reason", ""),
+            "boss_request": review.get("owner_request", ""),
+            "risk": review.get("risk", "medium"),
+            "input_request": review.get("input_request"),
+            "suggested_action": review.get("guidance", ""),
+        }
+        if valid_remote_owner_request(owner_request):
+            remote_store.create_deviation(
+                plan.id,
+                plan.target,
+                "Qwen requests one owner decision",
+                owner_request,
+            )
+        else:
+            context["next_guidance"] = (
+                "Governance rejected the proposed boss escalation as internal or "
+                "underspecified. Resolve it with Codex or formulate one concrete "
+                "authority/human decision."
+            )
+            remote_store.update_plan(
+                plan.id,
+                status="approved",
+                attempts=0,
+                codex_thread="",
+                context=context,
+            )
+            remote_store.event(
+                plan.id,
+                "remote_invalid_escalation_blocked",
+                str(owner_request.get("boss_request", ""))[:1000],
+            )
     elif attempts >= plan.budget.max_attempts_per_milestone:
         cycles = int(context.get("manager_recovery_cycles", 0)) + 1
         context["manager_recovery_cycles"] = cycles
