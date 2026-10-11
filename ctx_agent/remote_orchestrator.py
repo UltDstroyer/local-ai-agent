@@ -1883,13 +1883,18 @@ def run_remote_plan_step(
             return
 
         final_context["next_guidance"] = ""
+        manager_note = str(
+            manager_final.get("context_note")
+            or manager_final.get("reason")
+            or "Final remote verification passed."
+        )[:3000]
         remote_store.update_plan(
             plan.id,
             status="completed",
             context=final_context,
             result=(
-                "Codex and Qwen completed final remote verification.\n\n"
-                + str(verdict.get("summary", ""))[:12000]
+                "Qwen manager: final remote verification passed.\n\n"
+                + manager_note
             ),
         )
         remote_store.event(plan.id, "remote_plan_completed")
