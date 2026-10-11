@@ -660,13 +660,16 @@ Rules:
     value["risk"] = risk if risk in ("low", "medium", "high") else "medium"
     dependency = value.get("dependency_request")
     if dependency is not None:
+        invalid_dependency = False
         if not isinstance(dependency, dict):
+            invalid_dependency = True
             dependency = None
         else:
             kind = str(dependency.get("kind", "")).strip()
             name = str(dependency.get("name", "")).strip()
             reason = str(dependency.get("reason", "")).strip()
             if kind not in ("package", "service") or not name or not reason:
+                invalid_dependency = True
                 dependency = None
             else:
                 dependency = {
@@ -676,6 +679,17 @@ Rules:
                 }
                 value["owner_needed"] = True
         value["dependency_request"] = dependency
+        if invalid_dependency:
+            value["owner_needed"] = False
+            value["owner_request"] = ""
+            value["agreement"] = False
+            correction = (
+                "Correct the dependency_request schema internally. It must name "
+                "exactly one package or service and explain why it is required. "
+                "Do not ask the owner to approve formatting."
+            )
+            value["guidance_to_manager"] = correction
+            value["better_strategy"] = correction
     return value
 
 
@@ -970,7 +984,9 @@ def _manager_scope_review(
             }
         if (
             action.get("op") == "service"
-            and action.get("action") in ("start", "enable", "enable_now")
+            and action.get("action") in (
+                "start", "restart", "enable", "enable_now"
+            )
         ):
             return {
                 "approve": False,
@@ -1175,7 +1191,9 @@ def _dependency_key(action: dict) -> str | None:
     if op == "package_install":
         packages = sorted(str(x) for x in action.get("packages", []) if str(x))
         return "packages:" + ",".join(packages) if packages else None
-    if op == "service" and action.get("action") in ("start", "enable", "enable_now"):
+    if op == "service" and action.get("action") in (
+        "start", "restart", "enable", "enable_now"
+    ):
         service = str(action.get("service", "")).strip()
         return "service:" + canonical_service_name(service) if service else None
     return None
