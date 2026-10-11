@@ -269,8 +269,10 @@ approved changes deliberately.
 
 ## SSH targets and remote systems
 
-ctx-agent can also manage machines that are reachable only through SSH, without
-giving the system daemon your SSH private keys or a raw remote shell.
+ctx-agent can also manage machines that are reachable only through SSH without
+giving the system daemon your SSH private keys. Remote plans prefer a typed
+action vocabulary, with an explicit high-trust remote-admin capability available
+when the owner wants hands-off control of that SSH target.
 
 The NixOS module starts a second user-owned bridge:
 
@@ -328,7 +330,7 @@ Only maximum mode leases remote milestones. Codex remains the primary engineer,
 but it cannot call SSH directly. It proposes typed actions and ctx-agent checks
 them against the owner-approved contract before the SSH bridge executes them.
 
-The current typed action vocabulary supports:
+The normal typed action vocabulary supports:
 
 - reading approved remote files
 - writing approved config files
@@ -338,7 +340,12 @@ The current typed action vocabulary supports:
 - deterministic checks such as nginx -t, systemctl is-active, journal tails,
   listening sockets, path/command existence, and HTTP checks
 
-There is intentionally no arbitrary remote shell operation.
+A remote plan may also explicitly set allow_remote_admin=true. That enables the
+SSH-only remote_exec action for arbitrary commands on the named remote target,
+including optional non-interactive sudo. This capability does not expose a local
+desktop shell. Typed path/package/service allowlists do not constrain
+remote_exec, so its authority is visible in the plan and must be owner-approved
+before execution.
 
 Remote config writes are backed up under:
 
@@ -366,11 +373,12 @@ The SSH bridge uses BatchMode, disables password and keyboard-interactive
 prompts, and requires an already trusted host key. Connect to a machine manually
 with ssh once before registering it if its host key is not already present.
 
-The remote worker deliberately does not expose disk partitioning, firewall
-reset, sshd configuration changes, credential mutation, arbitrary command
-execution, or secret injection. Some setups, especially first-time Cloudflare
-Tunnel authentication or adding third-party package repositories, can therefore
-pause and ask for a human step instead of silently broadening authority.
+Without allow_remote_admin, the remote worker retains the narrow typed-action
+boundary. With allow_remote_admin, Codex can perform broader administration on
+the SSH target, including cleanup, package removal, repository management, and
+other shell-level maintenance. Credential-bearing interactive workflows and
+physical operations can still require the owner. remote_exec changes are not
+automatically reversible by the typed file-backup mechanism.
 
 ## Documentation
 
