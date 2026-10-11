@@ -2967,6 +2967,10 @@ def approve_remote_deviation(settings, remote_store, did: str) -> dict:
     row = remote_store.get_plan(deviation["plan"])
     if not row:
         raise RemoteOrchestrationError("remote deviation has no plan")
+    if row.get("status") != "awaiting_deviation":
+        raise RemoteOrchestrationError(
+            "remote deviation is stale because the plan is no longer waiting for it"
+        )
     plan = RemotePlan.from_dict(row["plan"], row["target"], row["id"])
     request = deviation["request"]
     request_type = request.get("type")
