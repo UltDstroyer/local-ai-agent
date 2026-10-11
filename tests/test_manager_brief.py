@@ -52,10 +52,15 @@ class ManagerBriefTests(unittest.TestCase):
         self.assertNotIn("validator stack trace", text)
         self.assertNotIn("debug internal bridge", text)
 
-    def test_failed_manager_summary_does_not_leak_raw_payload(self):
+    def test_failed_manager_summary_shows_only_current_deviation_fields(self):
         deviation = {
-            "reason": "secret low-level failure details",
-            "request": {"error": "raw tool output"},
+            "reason": "service restart needs approval",
+            "request": {
+                "error": "nginx restart failed once",
+                "suggested_action": "Approve one retry.",
+                "risk": "low",
+                "history": ["old unrelated event", "another old event"],
+            },
         }
         with patch(
             "ctx_agent.manager_brief.ask",
@@ -66,9 +71,11 @@ class ManagerBriefTests(unittest.TestCase):
                 deviation,
                 "balanced",
             )
-        self.assertNotIn("secret low-level failure", brief["summary"])
-        self.assertNotIn("raw tool output", brief["summary"])
-        self.assertEqual(brief["risk"], "medium")
+        self.assertIn("service restart needs approval", brief["summary"])
+        self.assertIn("nginx restart failed once", brief["summary"])
+        self.assertNotIn("old unrelated event", brief["summary"])
+        self.assertEqual(brief["risk"], "low")
+        self.assertEqual(brief["recommendation"], "Approve one retry.")
 
 
 if __name__ == "__main__":
