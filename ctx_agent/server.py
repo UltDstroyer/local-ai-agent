@@ -628,12 +628,20 @@ class Coordinator:
             "remote_deviation_approve",
             "remote_deviation_reject",
         ):
+            self._retire_invalid_remote_deviations()
             did = data.get("id", "")
             if not isinstance(did, str) or len(did) != 12 or not did.isalnum():
                 raise ValueError("Invalid remote deviation identifier")
             deviation = self.remote_store.get_deviation(did)
             if not deviation:
                 raise ValueError("No such remote deviation")
+            if (
+                op in ("remote_deviation_show", "remote_deviation_approve")
+                and deviation.get("status") != "pending"
+            ):
+                raise ValueError(
+                    "Qwen has already resolved or retired this item; no boss decision is pending"
+                )
             if op == "remote_deviation_show":
                 return {
                     "deviation": deviation,
@@ -823,12 +831,20 @@ class Coordinator:
                 )
             }
         if op in ("deviation_show", "deviation_approve", "deviation_reject"):
+            self._retire_invalid_local_deviations()
             did = data.get("id", "")
             if not isinstance(did, str) or len(did) != 12 or not did.isalnum():
                 raise ValueError("Invalid deviation identifier")
             deviation = self.store.get_deviation(did)
             if not deviation:
                 raise ValueError("No such deviation")
+            if (
+                op in ("deviation_show", "deviation_approve")
+                and deviation.get("status") != "pending"
+            ):
+                raise ValueError(
+                    "Qwen has already resolved or retired this item; no boss decision is pending"
+                )
             if op == "deviation_show":
                 return {
                     "deviation": deviation,
