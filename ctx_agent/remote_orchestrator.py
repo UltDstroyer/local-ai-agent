@@ -23,7 +23,7 @@ from .remote import (
     validate_remote_action,
 )
 from .ssh_bridge import SSHBridgeError, ssh_bridge_call
-from .governance import valid_remote_owner_request
+from .governance import owner_decision_key, valid_remote_owner_request
 
 
 class RemoteOrchestrationError(RuntimeError):
@@ -2054,23 +2054,45 @@ def run_remote_plan_step(
             )
             return
 
+        owner_request = {
+            "type": "human_input",
+            "milestone": plan.milestones[index],
+            "reason": input_review.get("reason", input_request["reason"]),
+            "boss_request": (
+                "Allow me to ask you for one human-only input needed for this step."
+            ),
+            "risk": "low" if not input_request["sensitive"] else "medium",
+            "input_request": input_request,
+            "suggested_action": (
+                "Provide only this one value; it will remain ephemeral."
+            ),
+        }
+        rejected_decisions = set(context.get("rejected_owner_decisions", []))
+        decision_key = owner_decision_key(owner_request)
+        if decision_key and decision_key in rejected_decisions:
+            context["next_guidance"] = (
+                "The owner already rejected this exact human-input request. Do "
+                "not ask again. Choose a different approach that does not require "
+                "that value, or stop cleanly if none exists."
+            )
+            remote_store.update_plan(
+                plan.id,
+                status="approved",
+                attempts=0,
+                codex_thread="",
+                context=context,
+            )
+            remote_store.event(
+                plan.id,
+                "remote_rejected_owner_decision_not_reasked",
+                decision_key,
+            )
+            return
         remote_store.create_deviation(
             plan.id,
             plan.target,
             "Qwen and Codex need one human-only input",
-            {
-                "type": "human_input",
-                "milestone": plan.milestones[index],
-                "reason": input_review.get("reason", input_request["reason"]),
-                "boss_request": (
-                    "Allow me to ask you for one human-only input needed for this step."
-                ),
-                "risk": "low" if not input_request["sensitive"] else "medium",
-                "input_request": input_request,
-                "suggested_action": (
-                    "Provide only this one value; it will remain ephemeral."
-                ),
-            },
+            owner_request,
         )
         return
 
@@ -2939,12 +2961,32 @@ def run_remote_plan_step(
                     "suggested_action": context["next_guidance"],
                 }
                 if valid_remote_owner_request(owner_request):
-                    remote_store.create_deviation(
-                        plan.id,
-                        plan.target,
-                        "Qwen and Codex need one owner decision",
-                        owner_request,
-                    )
+                    rejected_decisions = set(context.get("rejected_owner_decisions", []))
+                    decision_key = owner_decision_key(owner_request)
+                    if decision_key and decision_key in rejected_decisions:
+                        context["next_guidance"] = (
+                            "The owner already rejected this exact decision. Do not "
+                            "ask again; find a materially different route or stop cleanly."
+                        )
+                        remote_store.update_plan(
+                            plan.id,
+                            status="approved",
+                            attempts=0,
+                            codex_thread="",
+                            context=context,
+                        )
+                        remote_store.event(
+                            plan.id,
+                            "remote_rejected_owner_decision_not_reasked",
+                            decision_key,
+                        )
+                    else:
+                        remote_store.create_deviation(
+                            plan.id,
+                            plan.target,
+                            "Qwen and Codex need one owner decision",
+                            owner_request,
+                        )
                 else:
                     context["next_guidance"] = (
                         "Governance rejected the proposed boss escalation as an "
@@ -3134,12 +3176,32 @@ def run_remote_plan_step(
             "suggested_action": review.get("guidance", ""),
         }
         if valid_remote_owner_request(owner_request):
-            remote_store.create_deviation(
-                plan.id,
-                plan.target,
-                "Qwen requests one owner decision",
-                owner_request,
-            )
+            rejected_decisions = set(context.get("rejected_owner_decisions", []))
+            decision_key = owner_decision_key(owner_request)
+            if decision_key and decision_key in rejected_decisions:
+                context["next_guidance"] = (
+                    "The owner already rejected this exact decision. Do not ask "
+                    "again; continue with a materially different approach or stop cleanly."
+                )
+                remote_store.update_plan(
+                    plan.id,
+                    status="approved",
+                    attempts=0,
+                    codex_thread="",
+                    context=context,
+                )
+                remote_store.event(
+                    plan.id,
+                    "remote_rejected_owner_decision_not_reasked",
+                    decision_key,
+                )
+            else:
+                remote_store.create_deviation(
+                    plan.id,
+                    plan.target,
+                    "Qwen requests one owner decision",
+                    owner_request,
+                )
         else:
             context["next_guidance"] = (
                 "Governance rejected the proposed boss escalation as internal or "
@@ -3370,6 +3432,14 @@ def reject_remote_deviation(settings, remote_store, did: str) -> dict:
             if action_key not in rejected_actions:
                 rejected_actions.append(action_key)
             context["rejected_action_leases"] = rejected_actions[-50:]
+    if request.get("type") in (
+        "manager_escalation", "human_access", "human_input", "human_input_refresh"
+    ):
+        rejected_decisions = list(context.get("rejected_owner_decisions", []))
+        decision_key = owner_decision_key(request)
+        if decision_key and decision_key not in rejected_decisions:
+            rejected_decisions.append(decision_key)
+        context["rejected_owner_decisions"] = rejected_decisions[-50:]
     context["next_guidance"] = (
         "Owner rejected the deviation. Treat that exact decision as settled for "
         "this plan, preserve completed in-contract work, and find an alternative "
