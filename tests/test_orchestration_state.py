@@ -49,6 +49,8 @@ class PlanStoreTests(unittest.TestCase):
             store = Store(root / "state.sqlite3")
             plan = Plan.from_dict(raw_plan(), "demo")
             store.create_plan("demo", plan.goal, plan.to_dict())
+            self.assertTrue(store.approve_plan(plan.id))
+            self.assertEqual(store.next_plan()["status"], "running")
             did = store.create_deviation(
                 plan.id, "demo", "needs another file",
                 {"add_write_scope": ["helper.py"]},
@@ -66,6 +68,8 @@ class PlanStoreTests(unittest.TestCase):
             store = Store(root / "state.sqlite3")
             plan = Plan.from_dict(raw_plan(), "demo")
             store.create_plan("demo", plan.goal, plan.to_dict())
+            self.assertTrue(store.approve_plan(plan.id))
+            self.assertEqual(store.next_plan()["status"], "running")
             first = store.create_deviation(
                 plan.id, "demo", "first", {"add_write_scope": ["helper.py"]}
             )
@@ -78,6 +82,51 @@ class PlanStoreTests(unittest.TestCase):
                 if item["status"] == "pending"
             ]
             self.assertEqual(len(pending), 1)
+
+
+    def test_deviation_cannot_be_created_before_plan_is_running(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            store = Store(root / "state.sqlite3")
+            plan = Plan.from_dict(raw_plan(), "demo")
+            store.create_plan("demo", plan.goal, plan.to_dict())
+            with self.assertRaisesRegex(ValueError, "no longer running"):
+                store.create_deviation(
+                    plan.id,
+                    "demo",
+                    "should not be possible",
+                    {"type": "manager_escalation"},
+                )
+            self.assertEqual(
+                store.get_plan(plan.id)["status"],
+                "awaiting_approval",
+            )
+
+    def test_cancelled_plan_cannot_be_resurrected_by_stale_worker_update(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            store = Store(root / "state.sqlite3")
+            plan = Plan.from_dict(raw_plan(), "demo")
+            store.create_plan("demo", plan.goal, plan.to_dict())
+            self.assertTrue(store.approve_plan(plan.id))
+            self.assertIsNotNone(store.next_plan())
+            self.assertTrue(store.cancel_plan(plan.id))
+            with self.assertRaisesRegex(ValueError, "cannot be resurrected"):
+                store.update_plan(plan.id, status="approved")
+            self.assertEqual(store.get_plan(plan.id)["status"], "cancelled")
+
+    def test_generic_update_cannot_bypass_owner_plan_approval(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            store = Store(root / "state.sqlite3")
+            plan = Plan.from_dict(raw_plan(), "demo")
+            store.create_plan("demo", plan.goal, plan.to_dict())
+            with self.assertRaisesRegex(ValueError, "dedicated transition"):
+                store.update_plan(plan.id, status="approved")
+            self.assertEqual(
+                store.get_plan(plan.id)["status"],
+                "awaiting_approval",
+            )
 
 
 class CoordinatorApprovalTests(unittest.TestCase):
