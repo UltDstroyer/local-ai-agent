@@ -292,7 +292,7 @@ class AdapterTests(unittest.TestCase):
             "plan": {
                 "id": "plan123",
                 "target": "pi",
-                "status": "approved",
+                "status": "awaiting_approval",
             }
         }
         with patch.dict(os.environ, {
@@ -314,11 +314,11 @@ class AdapterTests(unittest.TestCase):
         direct.assert_called_once_with(
             "/run/ctx-agent/agent.sock",
             {
-                "op": "remote_plan_retry_internal",
+                "op": "remote_plan_prepare_recovery",
                 "target": "pi",
                 "id": "plan123",
             },
-            timeout=30,
+            timeout=1800,
         )
         cli.assert_called_once_with([
             "remote-plan-progress", "pi", "plan123"
