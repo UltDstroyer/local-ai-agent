@@ -87,11 +87,14 @@ def _run_script(
 ) -> dict:
     if not isinstance(script, str) or not script or len(script) > 100_000:
         raise SSHBridgeError("invalid remote script")
-    command = _ssh_base(target) + ["sh", "-c", shlex.quote(script)]
+    # Stream the remote script over stdin instead of embedding it in the
+    # local ssh process argv. This keeps ephemeral credentials and other
+    # substituted human inputs out of the local process list.
+    command = _ssh_base(target) + ["sh", "-s"]
     try:
         proc = subprocess.run(
             command,
-            stdin=subprocess.DEVNULL,
+            input=script,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
