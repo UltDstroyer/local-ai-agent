@@ -2498,33 +2498,12 @@ def run_remote_plan_step(
             if owner_action_approved
             else plan
         )
-        if owner_action_approved:
-            approved_action_leases.remove(action_lease_key)
-            context["approved_action_leases"] = sorted(
-                approved_action_leases
-            )[-50:]
-            remote_store.update_plan(plan.id, context=context)
-            remote_store.event(
-                plan.id,
-                "remote_owner_action_lease_consumed",
-                action_lease_key,
-            )
-
         critical_owner_approved = False
+        critical_action_key = ""
         if action.get("op") == "remote_exec":
-            action_key = _critical_exec_key(action)
-            if action_key in approved_critical_execs:
+            critical_action_key = _critical_exec_key(action)
+            if critical_action_key in approved_critical_execs:
                 critical_owner_approved = True
-                approved_critical_execs.remove(action_key)
-                context["approved_critical_execs"] = sorted(
-                    approved_critical_execs
-                )[-30:]
-                remote_store.update_plan(plan.id, context=context)
-                remote_store.event(
-                    plan.id,
-                    "remote_critical_exec_lease_consumed",
-                    action_key,
-                )
         result = ssh_bridge_call(
             settings.ssh_bridge_socket,
             {
@@ -2545,6 +2524,28 @@ def run_remote_plan_step(
             "returncode": result.get("returncode"),
             "output": result.get("output", "")[-6000:],
         })
+        if result.get("ok") and owner_action_approved:
+            approved_action_leases.discard(action_lease_key)
+            context["approved_action_leases"] = sorted(
+                approved_action_leases
+            )[-50:]
+            remote_store.event(
+                plan.id,
+                "remote_owner_action_lease_consumed",
+                action_lease_key,
+            )
+        if result.get("ok") and critical_owner_approved and critical_action_key:
+            approved_critical_execs.discard(critical_action_key)
+            context["approved_critical_execs"] = sorted(
+                approved_critical_execs
+            )[-30:]
+            remote_store.event(
+                plan.id,
+                "remote_critical_exec_lease_consumed",
+                critical_action_key,
+            )
+        if result.get("ok") and (owner_action_approved or critical_owner_approved):
+            remote_store.update_plan(plan.id, context=context)
         if result.get("mutation"):
             record = dict(result["mutation"])
             record["milestone"] = index
