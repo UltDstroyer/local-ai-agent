@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 from .agent import ask
 from .codex_bridge import bridge_call
 from .remote import (
+    PACKAGE_RE,
+    SERVICE_RE,
     RemoteBudget,
     RemoteContractError,
     RemotePlan,
@@ -1440,6 +1442,8 @@ def _dependency_request_from_checkin(
     reason = str(dependency.get("reason", "")).strip()
     if kind == "package" and name and reason:
         action = {"op": "package_install", "packages": [name]}
+        if _dependency_key(action) is None:
+            return None
         request = _dependency_owner_request(
             plan,
             action,
@@ -1457,6 +1461,8 @@ def _dependency_request_from_checkin(
             "service": name,
             "action": service_action,
         }
+        if _dependency_key(action) is None:
+            return None
         request = _dependency_owner_request(
             plan,
             action,
@@ -1520,7 +1526,11 @@ def _dependency_key(action: dict) -> str | None:
         if (
             not isinstance(packages, list)
             or not packages
-            or any(not isinstance(item, str) or not item.strip() for item in packages)
+            or any(
+                not isinstance(item, str)
+                or not PACKAGE_RE.fullmatch(item.strip())
+                for item in packages
+            )
         ):
             return None
         normalized = sorted(item.strip() for item in packages)
@@ -1529,7 +1539,10 @@ def _dependency_key(action: dict) -> str | None:
         "start", "restart", "enable", "enable_now"
     ):
         service = action.get("service")
-        if not isinstance(service, str) or not service.strip():
+        if (
+            not isinstance(service, str)
+            or not SERVICE_RE.fullmatch(service.strip())
+        ):
             return None
         return "service:" + canonical_service_name(service.strip())
     return None
