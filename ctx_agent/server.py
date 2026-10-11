@@ -14,6 +14,10 @@ from .agent import run_agent
 from .codex_bridge import BridgeError
 from .contracts import ContractError, Plan, analyze_changes, contract_violations
 from .manager_brief import manager_deviation_brief
+from .governance import (
+    valid_local_owner_request,
+    valid_remote_owner_request,
+)
 from .orchestrator import (
     OrchestrationError,
     approve_deviation,
@@ -21,6 +25,7 @@ from .orchestrator import (
     create_negotiated_plan,
     ensure_workspace,
     reject_deviation,
+    restore_checkpoint,
     run_plan_step,
 )
 from .remote import RemoteContractError, RemoteTarget
@@ -113,8 +118,79 @@ class Coordinator:
                 ",".join(str(x) for x in available)[:1000],
             )
 
+        self._retire_invalid_remote_deviations()
+        self._retire_invalid_local_deviations()
+
     def project(self, name):
         return project_path(self.settings.projects_dir, name)
+
+    def _retire_invalid_remote_deviations(self):
+        for row in self.remote_store.list_plans(limit=100):
+            if row.get("status") != "awaiting_deviation":
+                continue
+            deviation = self.remote_store.pending_deviation(row["id"])
+            if not deviation or valid_remote_owner_request(deviation.get("request")):
+                continue
+            if not self.remote_store.resolve_deviation(deviation["id"], False):
+                continue
+            context = dict(row.get("context", {}))
+            context["next_guidance"] = (
+                "Qwen governance retired an internal/obsolete request before it "
+                "reached the boss. Re-evaluate the technical problem with Codex "
+                "and escalate only a concrete authority, dependency, credential, "
+                "or human-choice decision."
+            )
+            self.remote_store.update_plan(
+                row["id"], status="approved", attempts=0, context=context
+            )
+            self.remote_store.event(
+                row["id"],
+                "remote_internal_deviation_auto_retired",
+                deviation["id"],
+            )
+
+    def _retire_invalid_local_deviations(self):
+        for row in self.store.list_plans(limit=100):
+            if row.get("status") != "awaiting_deviation":
+                continue
+            deviation = self.store.pending_deviation(row["id"])
+            if not deviation or valid_local_owner_request(deviation.get("request")):
+                continue
+            if not self.store.resolve_deviation(deviation["id"], False):
+                continue
+            request = deviation.get("request") or {}
+            if (
+                "mutation_budget" in request
+                or request.get("add_write_scope")
+            ):
+                try:
+                    restore_checkpoint(
+                        self.settings, self.project(row["project"]), row
+                    )
+                except Exception:
+                    self.store.update_plan(
+                        row["id"],
+                        status="cancelled",
+                        result=(
+                            "An obsolete mutation request could not be safely "
+                            "rolled back during governance recovery."
+                        ),
+                    )
+                    continue
+            context = dict(row.get("context", {}))
+            context["next_guidance"] = (
+                "Qwen governance retired an internal/obsolete request before it "
+                "reached the boss. Re-evaluate with Codex and escalate only a "
+                "real owner authority or preference decision."
+            )
+            self.store.update_plan(
+                row["id"], status="approved", attempts=0, context=context
+            )
+            self.store.event(
+                row["id"],
+                "project_internal_deviation_auto_retired",
+                deviation["id"],
+            )
 
     def _planning_key(self, kind: str, scope: str):
         return (kind, scope)
@@ -541,6 +617,7 @@ class Coordinator:
             return {"plan": self._remote_plan_view(plan)}
 
         if op == "remote_deviation_list":
+            self._retire_invalid_remote_deviations()
             return {
                 "deviations": self.remote_store.list_deviations(
                     target=data.get("target") or None
@@ -739,6 +816,7 @@ class Coordinator:
             return {"applied": applied, "plan": self.store.get_plan(pid)}
 
         if op == "deviation_list":
+            self._retire_invalid_local_deviations()
             return {
                 "deviations": self.store.list_deviations(
                     project=data.get("project") or None
