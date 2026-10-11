@@ -430,6 +430,27 @@ class Coordinator:
             raise ValueError("Manager chat message must be 1 to 4000 characters")
         message = message.strip()
         store = self.remote_store if remote else self.store
+        lowered_message = " ".join(message.lower().split())
+        report_intent = any(
+            marker in lowered_message
+            for marker in (
+                "progress report",
+                "timeline",
+                "what have you done",
+                "what you've done",
+                "what has happened",
+                "what happened",
+                "what failed",
+                "what hasn't worked",
+                "what has not worked",
+                "why hasn't",
+                "why has not",
+                "so far",
+                "project history",
+                "work history",
+                "status summary",
+            )
+        )
         context = ensure_management_contract(row.get("context", {}))
         context["owner_policy_snapshot"] = self._load_owner_policy()
         conversation = [
@@ -450,6 +471,38 @@ class Coordinator:
                 "reason": pending.get("reason", ""),
                 "request": pending.get("request", {}),
             }
+        if report_intent:
+            retrospective = self._manager_report(row, remote=remote)
+            report = retrospective.get("report") or {}
+            answer = str(
+                report.get("summary")
+                or report.get("headline")
+                or "I prepared the current project retrospective."
+            ).strip()[:6000]
+            conversation.extend([
+                {"role": "owner", "content": message[:4000]},
+                {"role": "qwen", "content": answer[:6000]},
+            ])
+            context["manager_conversation"] = conversation[-20:]
+            store.update_plan(row["id"], context=context)
+            store.event(
+                row["id"],
+                "owner_manager_report_requested",
+                "Owner requested a manager-level project retrospective.",
+            )
+            return {
+                "reply": answer,
+                "manager_report": retrospective,
+                "plan_id": row["id"],
+                "pending_deviation": (
+                    {
+                        "id": pending.get("id", ""),
+                        "status": pending.get("status", ""),
+                    }
+                    if pending else None
+                ),
+            }
+
         prompt = f"""You are Qwen, the manager speaking directly with your human boss.
 Codex and execution tools report to you. The boss may ask questions, add
 requirements, challenge your recommendation, or change priorities.
