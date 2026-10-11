@@ -2,8 +2,10 @@
 
 ## Design goal
 
-Remote administration should feel like the local Codex workflow without turning
-ctx-agent into an unrestricted SSH shell.
+Remote administration should feel like the local Codex workflow while keeping
+desktop authority separate from remote-target authority. Typed actions are the
+default, and an owner-approved high-trust mode can intentionally grant arbitrary
+administration on the named SSH target without granting a local desktop shell.
 
 The system coordinator owns policy and approval state. The desktop user owns SSH
 credentials. Codex remains the primary engineer, but it proposes typed actions
@@ -80,6 +82,7 @@ A remote plan includes:
     allow_sudo
     allow_package_install
     allow_network
+    allow_remote_admin
     max_actions
     max_file_writes
     max_attempts_per_milestone
@@ -114,7 +117,12 @@ check:
     Supports systemctl_is_active, http_get, http_head, nginx_test,
     journal_tail, listen_sockets, command_exists, and path_exists.
 
-There is no arbitrary command or raw shell action.
+remote_exec:
+    Available only when allow_remote_admin=true in the approved remote plan.
+    Runs an arbitrary command on the named SSH target, optionally as root via
+    non-interactive sudo. Typed path/package/service allowlists do not constrain
+    this action. The command is transported as an SSH argument and is never
+    executed by a local desktop shell.
 
 ## Backups and rollback
 
@@ -157,11 +165,12 @@ Execution:
 For each milestone:
 
 1. ctx-agent gets a fresh read-only inspection.
-2. Codex proposes typed actions.
+2. Codex proposes typed actions, or remote_exec when the approved plan grants
+   remote-admin authority.
 3. The local administrator reviews necessity and task alignment.
-4. The contract validator checks paths, services, packages, domains, counts,
-   sudo, and network capabilities.
-5. The SSH broker executes approved typed actions.
+4. The contract validator checks ordinary typed scopes and verifies that any
+   remote_exec request has explicit remote-admin authority.
+5. The SSH broker executes the approved action on the named target.
 6. Results are returned to ctx-agent and persisted.
 7. A fresh inspection is taken.
 8. The local administrator decides whether the milestone is complete.
@@ -200,21 +209,19 @@ final-verification deviation.
 
 ## Deliberate limitations
 
-The broker does not currently provide:
+Without allow_remote_admin, the broker remains limited to the typed action
+vocabulary above.
 
-- arbitrary shell execution
-- sshd configuration changes
-- disk formatting or partitioning
-- firewall reset
-- user/password/key changes
-- direct secret injection
-- general-purpose package-repository installation
-- arbitrary downloads
-- unattended interactive login flows
+With allow_remote_admin, the broker can run arbitrary commands on the named SSH
+target and can therefore perform package removal, repository setup, service
+migration, cleanup, and other system administration. This is intentionally a
+high-trust capability. It does not grant arbitrary local command execution on
+the desktop, and SSH agent forwarding is not enabled by the bridge.
 
-Those omissions are intentional. A first-time Cloudflare Tunnel login, a new
-third-party apt repository, or another credential-bearing workflow may require a
-human step.
+Credential-bearing interactive login flows, secrets the agent does not possess,
+physical media changes, and operations that destroy SSH connectivity can still
+require a human step. remote_exec changes are not automatically reversible by
+the typed file-backup mechanism.
 
 The user-owned SSH bridge itself has the same network reach and filesystem access
 as the desktop user because it must own the user's SSH credentials. The narrow
