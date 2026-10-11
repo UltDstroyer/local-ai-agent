@@ -231,6 +231,69 @@ def _print_plan_summary(value):
             print("  authority:", "; ".join(authority))
 
 
+def _print_manager_report(value):
+    report = value.get("report") or value
+    print("[Qwen manager] progress report")
+    if report.get("headline"):
+        print("  ", report["headline"])
+    if report.get("status"):
+        print("  status:", report["status"])
+    if report.get("summary"):
+        print("  summary:", report["summary"])
+
+    done = report.get("done") or []
+    if done:
+        print("  done:")
+        for item in done:
+            print("    [done]", item)
+
+    failed = report.get("did_not_work") or []
+    if failed:
+        print("  what did not work:")
+        for item in failed:
+            if not isinstance(item, dict):
+                continue
+            attempt = str(item.get("attempt", "")).strip()
+            why = str(item.get("why", "")).strip()
+            response = str(item.get("response", "")).strip()
+            line = attempt
+            if why:
+                line += (": " if line else "") + why
+            print("    [failed]", line or "attempt failed")
+            if response:
+                print("      response:", response)
+
+    decisions = report.get("decisions") or []
+    if decisions:
+        print("  decisions that affected the work:")
+        for item in decisions:
+            print("    -", item)
+
+    remaining = report.get("remaining") or []
+    if remaining:
+        print("  remaining:")
+        for item in remaining:
+            print("    [pending]", item)
+
+    if report.get("justification"):
+        print("  overall justification:", report["justification"])
+
+    timeline = report.get("timeline") or []
+    if timeline:
+        print("  timeline:")
+        for item in timeline:
+            if not isinstance(item, dict):
+                continue
+            when = str(item.get("at", "")).strip()
+            event = str(item.get("event", "")).strip()
+            why = str(item.get("why", "")).strip()
+            prefix = f"{when}  " if when else ""
+            line = prefix + event
+            if why:
+                line += " — " + why
+            print("    " + line)
+
+
 def _print_plan_list(result):
     plans = result.get("plans") or []
     if not plans:
@@ -561,6 +624,10 @@ def main(argv=None):
     item.add_argument("key")
     item.add_argument("text")
 
+    item = sub.add_parser("plan-report")
+    item.add_argument("project")
+    item.add_argument("id", nargs="?")
+
     item = sub.add_parser("plan-chat")
     item.add_argument("project")
     item.add_argument("id")
@@ -595,6 +662,10 @@ def main(argv=None):
     for cmd in ("target-show", "target-remove", "target-inspect"):
         item = sub.add_parser(cmd)
         item.add_argument("name")
+
+    item = sub.add_parser("remote-plan-report")
+    item.add_argument("target")
+    item.add_argument("id", nargs="?")
 
     item = sub.add_parser("remote-plan-chat")
     item.add_argument("target")
@@ -769,6 +840,8 @@ def main(argv=None):
             _print_plan_summary(result)
         elif args.action in ("plan-list", "remote-plan-list"):
             _print_plan_list(result)
+        elif args.action in ("plan-report", "remote-plan-report"):
+            _print_manager_report(result)
         elif args.action in ("plan-chat", "remote-plan-chat"):
             print("[Qwen manager]", result.get("reply", ""))
             pending = result.get("pending_deviation")
