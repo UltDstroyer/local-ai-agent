@@ -2033,6 +2033,7 @@ def run_remote_plan_step(
 
     validated = []
     approved_action_leases = set(context.get("approved_action_leases", []))
+    rejected_action_leases = set(context.get("rejected_action_leases", []))
     approved_dependencies = set(context.get("approved_dependencies", []))
     rejected_dependencies = set(context.get("rejected_dependencies", []))
     approved_critical_execs = set(context.get("approved_critical_execs", []))
@@ -2070,6 +2071,24 @@ def run_remote_plan_step(
                         return
                     critical_batch_seen.add(critical_key)
                 if not critical_approved:
+                    if owner_action_key in rejected_action_leases:
+                        context["next_guidance"] = (
+                            "The owner already rejected this exact critical action. "
+                            "Do not request it again. Choose a different technical path."
+                        )
+                        remote_store.update_plan(
+                            plan.id,
+                            status="approved",
+                            attempts=0,
+                            codex_thread="",
+                            context=context,
+                        )
+                        remote_store.event(
+                            plan.id,
+                            "remote_rejected_action_not_reasked",
+                            owner_action_key,
+                        )
+                        return
                     critical_review = _manager_critical_exec_review(
                         settings,
                         plan,
@@ -2471,6 +2490,24 @@ def run_remote_plan_step(
                     validated.append(checked)
                     continue
 
+            if owner_action_key in rejected_action_leases:
+                context["next_guidance"] = (
+                    "The owner already rejected this exact scope-expanding action. "
+                    "Do not request it again. Find a different route inside approved authority."
+                )
+                remote_store.update_plan(
+                    plan.id,
+                    status="approved",
+                    attempts=0,
+                    codex_thread="",
+                    context=context,
+                )
+                remote_store.event(
+                    plan.id,
+                    "remote_rejected_action_not_reasked",
+                    owner_action_key,
+                )
+                return
             request = action_deviation(plan, action, reason)
             request["manager_review"] = manager
             request["suggested_action"] = (
@@ -3073,6 +3110,14 @@ def reject_remote_deviation(settings, remote_store, did: str) -> dict:
         if dependency_key and dependency_key not in rejected:
             rejected.append(dependency_key)
         context["rejected_dependencies"] = rejected[-50:]
+    if request.get("type") in ("remote_scope", "critical_remote_exec"):
+        proposed_action = request.get("proposed_action")
+        if isinstance(proposed_action, dict) and proposed_action:
+            rejected_actions = list(context.get("rejected_action_leases", []))
+            action_key = _owner_action_key(proposed_action)
+            if action_key not in rejected_actions:
+                rejected_actions.append(action_key)
+            context["rejected_action_leases"] = rejected_actions[-50:]
     context["next_guidance"] = (
         "Owner rejected the deviation. Treat that exact decision as settled for "
         "this plan, preserve completed in-contract work, and find an alternative "
