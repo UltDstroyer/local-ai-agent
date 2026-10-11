@@ -3116,6 +3116,42 @@ def run_remote_plan_step(
                     context["manager_strategy"][:1800],
                 )
         else:
+            manager_failure_review = _completion_review(
+                settings,
+                plan,
+                plan.milestones[index],
+                results,
+                inspection.get("output", ""),
+                mode,
+            )
+            manager_guidance = str(
+                manager_failure_review.get("guidance", "")
+            ).strip()
+            if manager_guidance:
+                context["next_guidance"] = manager_guidance[:3000]
+            if manager_failure_review.get("owner_needed") is True:
+                context["next_guidance"] = (
+                    context.get("next_guidance", "")
+                    + " Qwen suspects an owner decision may be required, but Codex "
+                      "must confirm that need during the next engineer-manager cycle "
+                      "before anything is escalated."
+                )[-3000:]
+            context = _append_history(
+                context,
+                {
+                    "milestone": index,
+                    "manager_failure_review": str(
+                        manager_failure_review.get("reason", "")
+                    )[:1800],
+                    "attempt": attempts,
+                },
+            )
+            remote_store.event(
+                plan.id,
+                "remote_manager_reviewed_failed_cycle",
+                f"{attempts}: "
+                + str(manager_failure_review.get("reason", ""))[:1200],
+            )
             remote_store.update_plan(
                 plan.id,
                 status="approved",
