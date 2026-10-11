@@ -736,6 +736,43 @@ def _append_context(context: dict, note: str, codex_message: str) -> dict:
     return value
 
 
+def _local_request_already_rejected(context: dict, request: dict) -> bool:
+    decision_key = owner_decision_key(request)
+    return bool(
+        decision_key
+        and decision_key in set(context.get("rejected_owner_decisions", []))
+    )
+
+
+def _resume_after_rejected_local_request(
+    settings,
+    store,
+    source: Path,
+    row: dict,
+    request: dict,
+    context: dict,
+) -> None:
+    restore_checkpoint(settings, source, row)
+    decision_key = owner_decision_key(request)
+    value = dict(context)
+    value["next_guidance"] = (
+        "The owner already rejected this exact mutation/authority decision. "
+        "Do not ask again. Choose a materially different implementation route "
+        "inside the approved mutation lease."
+    )
+    store.update_plan(
+        row["id"],
+        status="approved",
+        attempts=0,
+        context=value,
+    )
+    store.event(
+        row["id"],
+        "project_rejected_owner_decision_not_reasked",
+        decision_key,
+    )
+
+
 def run_plan_step(settings, store, source: Path, row: dict, mode: str):
     plan = _plan_from_row(row)
     index = int(row["current_milestone"])
@@ -795,6 +832,12 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
                     "Qwen reviewed the final scope change and determined that "
                     "it requires owner authority."
                 )
+                context = dict(row.get("context", {}))
+                if _local_request_already_rejected(context, request):
+                    _resume_after_rejected_local_request(
+                        settings, store, source, row, request, context
+                    )
+                    return
                 store.create_deviation(
                     plan.id, plan.project, "; ".join(violations), request
                 )
@@ -1024,6 +1067,11 @@ def run_plan_step(settings, store, source: Path, row: dict, mode: str):
             request["suggested_action"] = (
                 "Qwen escalated this mutation-lease expansion to the owner."
             )
+            if _local_request_already_rejected(context, request):
+                _resume_after_rejected_local_request(
+                    settings, store, source, row, request, context
+                )
+                return
             store.create_deviation(plan.id, plan.project, reason, request)
             return
 
@@ -1292,7 +1340,7 @@ def reject_deviation(settings, store, source: Path, did: str) -> dict:
     restore_checkpoint(settings, source, current_row)
     context = dict(current_row.get("context", {}))
     request = deviation.get("request") or {}
-    if request.get("type") == "manager_escalation":
+    if valid_local_owner_request(request):
         rejected_decisions = list(context.get("rejected_owner_decisions", []))
         decision_key = owner_decision_key(request)
         if decision_key and decision_key not in rejected_decisions:
