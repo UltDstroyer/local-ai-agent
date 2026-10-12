@@ -783,6 +783,37 @@ def _normalize_human_input_request(input_request: object) -> dict | None:
     }
 
 
+def _human_input_deviation_request(
+    plan: RemotePlan,
+    milestone: str,
+    input_request: dict,
+    reason: str = "",
+) -> dict:
+    """Build the one owner-facing deviation for a genuinely human-only input."""
+    prompt_text = str(input_request.get("prompt", "Provide the required value")).strip()
+    reason_text = str(reason or input_request.get("reason", "")).strip()
+    summary = (
+        f"I need one human-only input for {milestone}: {prompt_text}. "
+        + (reason_text if reason_text else "The machine cannot safely discover this value itself.")
+    ).strip()
+    return {
+        "type": "human_input",
+        "milestone": milestone,
+        "summary": summary[:900],
+        "reason": reason_text[:1800],
+        "boss_request": (
+            f"Provide this input through ctx: {prompt_text}. "
+            "You do not need to SSH into the target."
+        )[:500],
+        "risk": "medium" if input_request.get("sensitive") is True else "low",
+        "input_request": input_request,
+        "suggested_action": (
+            "Approve this deviation and enter only the requested value in ctx. "
+            "The value is passed ephemerally and is not written to the plan or logs."
+        ),
+    }
+
+
 def _manager_human_input_review(
     settings,
     plan: RemotePlan,
@@ -1066,7 +1097,10 @@ If a human-only input is required, input_request must be exactly one object:
   "sensitive": true
 }}
 Never request multiple values together. Never include the value itself in your
-response, plan, context, or logs.
+response, plan, context, or logs. Never tell the owner to SSH into the target,
+run a remote command, inspect a remote file, or finish a remote setup step for
+you. If the owner alone can supply a value or make a choice, create one
+human-input deviation and ask for it through ctx.
 
 If the current approach is failing repeatedly, use the full inspection, results,
 verification criteria, and prior context to choose a materially different
@@ -1100,7 +1134,7 @@ strategy before escalating to the owner."""
             value["owner_needed"] = True
             if not value["owner_request"]:
                 value["owner_request"] = (
-                    "Allow me to request one human-only input needed for this step."
+                    "Provide the human-only input through ctx; no SSH to the target is required."
                 )
         if value["owner_needed"] and not value["owner_request"]:
             raise ValueError("owner_needed requires one concrete owner_request")
@@ -1218,7 +1252,7 @@ or command output. Qwen and Codex must inspect those themselves."""
         owner_request = value.get("owner_request", "")
         if not isinstance(owner_request, str) or not owner_request.strip():
             value["owner_request"] = (
-                "Allow me to request one human-only input needed for this step."
+                "Provide the human-only input through ctx; no SSH to the target is required."
             )
     return value
 
@@ -2252,19 +2286,12 @@ def run_remote_plan_step(
             )
             return
 
-        owner_request = {
-            "type": "human_input",
-            "milestone": plan.milestones[index],
-            "reason": input_review.get("reason", input_request["reason"]),
-            "boss_request": (
-                "Allow me to ask you for one human-only input needed for this step."
-            ),
-            "risk": "low" if not input_request["sensitive"] else "medium",
-            "input_request": input_request,
-            "suggested_action": (
-                "Provide only this one value; it will remain ephemeral."
-            ),
-        }
+        owner_request = _human_input_deviation_request(
+            plan,
+            plan.milestones[index],
+            input_request,
+            input_review.get("reason", input_request["reason"]),
+        )
         rejected_decisions = set(context.get("rejected_owner_decisions", []))
         decision_key = owner_decision_key(owner_request)
         if decision_key and decision_key in rejected_decisions:
@@ -3235,20 +3262,27 @@ def run_remote_plan_step(
                 replan.get("owner_needed") is True
                 and checkin.get("owner_needed") is True
             ):
-                owner_request = {
-                    "type": "manager_escalation",
-                    "milestone": plan.milestones[index],
-                    "reason": str(replan.get("why_different", ""))[:2000],
-                    "boss_request": str(
-                        checkin.get("owner_request")
-                        or replan.get("owner_request", "")
-                    )[:500],
-                    "risk": str(
-                        checkin.get("risk", replan.get("risk", "medium"))
-                    )[:16],
-                    "input_request": replan.get("input_request"),
-                    "suggested_action": context["next_guidance"],
-                }
+                if isinstance(replan.get("input_request"), dict):
+                    owner_request = _human_input_deviation_request(
+                        plan,
+                        plan.milestones[index],
+                        replan["input_request"],
+                        str(replan.get("why_different", ""))[:2000],
+                    )
+                else:
+                    owner_request = {
+                        "type": "manager_escalation",
+                        "milestone": plan.milestones[index],
+                        "reason": str(replan.get("why_different", ""))[:2000],
+                        "boss_request": str(
+                            checkin.get("owner_request")
+                            or replan.get("owner_request", "")
+                        )[:500],
+                        "risk": str(
+                            checkin.get("risk", replan.get("risk", "medium"))
+                        )[:16],
+                        "suggested_action": context["next_guidance"],
+                    }
                 if valid_remote_owner_request(owner_request):
                     rejected_decisions = set(context.get("rejected_owner_decisions", []))
                     decision_key = owner_decision_key(owner_request)
@@ -3491,15 +3525,22 @@ def run_remote_plan_step(
 
     attempts = int(row["attempts"]) + 1
     if review.get("owner_needed") is True:
-        owner_request = {
-            "type": "manager_escalation",
-            "milestone": plan.milestones[index],
-            "reason": review.get("reason", ""),
-            "boss_request": review.get("owner_request", ""),
-            "risk": review.get("risk", "medium"),
-            "input_request": review.get("input_request"),
-            "suggested_action": review.get("guidance", ""),
-        }
+        if isinstance(review.get("input_request"), dict):
+            owner_request = _human_input_deviation_request(
+                plan,
+                plan.milestones[index],
+                review["input_request"],
+                str(review.get("reason", "")),
+            )
+        else:
+            owner_request = {
+                "type": "manager_escalation",
+                "milestone": plan.milestones[index],
+                "reason": review.get("reason", ""),
+                "boss_request": review.get("owner_request", ""),
+                "risk": review.get("risk", "medium"),
+                "suggested_action": review.get("guidance", ""),
+            }
         if valid_remote_owner_request(owner_request):
             rejected_decisions = set(context.get("rejected_owner_decisions", []))
             decision_key = owner_decision_key(owner_request)
