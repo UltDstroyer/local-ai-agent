@@ -1676,24 +1676,34 @@ secret values or request secrets through chat; use the secure input flow.
                             missing = next((key for key in available if key not in live), "")
                             metadata = dict(context.get("input_requests", {})).get(missing, {})
                             if missing:
+                                refresh_prompt = str(
+                                    metadata.get("prompt", f"Re-enter {missing}")
+                                )[:300]
+                                refresh_reason = str(metadata.get(
+                                    "reason",
+                                    "The coordinator restarted, so the value is no longer in memory."
+                                ))[:600]
                                 refresh_request = {
                                     "type": "human_input_refresh",
+                                    "summary": (
+                                        f"I need the previously supplied input again: "
+                                        f"{refresh_prompt}. {refresh_reason}"
+                                    )[:900],
                                     "boss_request": (
-                                        "Allow me to ask you to re-enter one "
-                                        "ephemeral input that was lost after restart."
-                                    ),
-                                    "risk": "low",
+                                        f"Provide this input through ctx again: "
+                                        f"{refresh_prompt}. You do not need to SSH "
+                                        "into the target."
+                                    )[:500],
+                                    "risk": "medium" if metadata.get("sensitive") is True else "low",
                                     "input_request": {
                                         "key": missing,
-                                        "prompt": str(metadata.get("prompt", f"Re-enter {missing}"))[:300],
-                                        "reason": str(metadata.get(
-                                            "reason",
-                                            "The coordinator restarted, so the value is no longer in memory."
-                                        ))[:600],
+                                        "prompt": refresh_prompt,
+                                        "reason": refresh_reason,
                                         "sensitive": metadata.get("sensitive") is True,
                                     },
                                     "suggested_action": (
-                                        "Re-enter only this value; no new authority is requested."
+                                        "Enter only this value in ctx; no new remote "
+                                        "authority or manual server work is requested."
                                     ),
                                 }
                                 decision_key = owner_decision_key(refresh_request)
@@ -1798,8 +1808,10 @@ secret values or request secrets through chat; use the secure input flow.
                                         failure.get("error", "")
                                     )[:1800],
                                     "boss_request": (
-                                        "Restore or authorize SSH key access to "
-                                        f"{row['target']} so I can continue."
+                                        "Restore or authorize SSH access for "
+                                        f"{row['target']} from the controlling machine "
+                                        "or account so I can continue. Do not perform "
+                                        "the server setup manually."
                                     ),
                                     "risk": "medium",
                                     "suggested_action": (
