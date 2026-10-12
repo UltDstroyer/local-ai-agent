@@ -55,6 +55,7 @@ class RemoteTarget:
     host: str
     user: str
     port: int = 22
+    autonomy: str = "high"
 
     @classmethod
     def from_dict(cls, raw: object) -> "RemoteTarget":
@@ -64,6 +65,7 @@ class RemoteTarget:
         host = raw.get("host", "")
         user = raw.get("user", "")
         port = raw.get("port", 22)
+        autonomy = raw.get("autonomy", "high")
         if not valid_name(name):
             raise RemoteContractError("invalid target name")
         if (
@@ -80,10 +82,24 @@ class RemoteTarget:
             raise RemoteContractError("invalid SSH user")
         if type(port) is not int or not 1 <= port <= 65535:
             raise RemoteContractError("invalid SSH port")
-        return cls(name=name, host=host, user=user, port=port)
+        if autonomy not in ("high", "restricted"):
+            raise RemoteContractError("SSH target autonomy must be high or restricted")
+        return cls(
+            name=name,
+            host=host,
+            user=user,
+            port=port,
+            autonomy=autonomy,
+        )
 
     @classmethod
-    def parse_ssh(cls, name: str, endpoint: str, port: int = 22) -> "RemoteTarget":
+    def parse_ssh(
+        cls,
+        name: str,
+        endpoint: str,
+        port: int = 22,
+        autonomy: str = "high",
+    ) -> "RemoteTarget":
         if not isinstance(endpoint, str) or endpoint.count("@") != 1:
             raise RemoteContractError("SSH endpoint must be USER@HOST")
         user, host = endpoint.split("@", 1)
@@ -92,6 +108,7 @@ class RemoteTarget:
             "host": host,
             "user": user,
             "port": port,
+            "autonomy": autonomy,
         })
 
     def to_dict(self) -> dict:
@@ -100,6 +117,7 @@ class RemoteTarget:
             "host": self.host,
             "user": self.user,
             "port": self.port,
+            "autonomy": self.autonomy,
         }
 
 
