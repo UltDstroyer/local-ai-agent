@@ -32,6 +32,7 @@ from ctx_agent.remote_orchestrator import (
     _dependency_owner_request,
     _dependency_preapproved,
     _dependency_request_from_checkin,
+    _human_input_deviation_request,
     _human_input_error,
     _is_remote_action_format_error,
     _manager_dependency_review,
@@ -1420,6 +1421,35 @@ class BossManagerEmployeeInvariantTests(unittest.TestCase):
             )
 
 
+
+    def test_human_input_deviation_is_the_actual_owner_request(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Expose Jellyfin",
+            "milestones": ["Configure Cloudflare tunnel"],
+            "verification": ["Public HTTPS works"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(allow_remote_admin=True),
+        }, "pi")
+        input_request = _normalize_human_input_request({
+            "key": "cloudflare_token",
+            "prompt": "Cloudflare Tunnel token",
+            "reason": "Needed to authenticate the tunnel.",
+            "sensitive": True,
+        })
+        request = _human_input_deviation_request(
+            plan,
+            "Configure Cloudflare tunnel",
+            input_request,
+            "The tunnel cannot authenticate without an owner-provided token.",
+        )
+        self.assertEqual(request["type"], "human_input")
+        self.assertIn("Cloudflare Tunnel token", request["summary"])
+        self.assertIn("Cloudflare Tunnel token", request["boss_request"])
+        self.assertIn("through ctx", request["boss_request"])
+        self.assertIn("do not need to SSH", request["boss_request"])
+        self.assertNotIn("allow me to ask", request["boss_request"].lower())
+        self.assertTrue(request["input_request"]["sensitive"])
 
     def test_secret_like_input_is_forced_sensitive(self):
         request = _normalize_human_input_request({
