@@ -29,7 +29,10 @@ def _fallback_brief(deviation: dict) -> dict:
         risk = "medium"
 
     summary_parts = []
-    if reason:
+    request_summary = request.get("summary", "")
+    if isinstance(request_summary, str) and request_summary.strip():
+        summary_parts.append(request_summary.strip())
+    if reason and reason not in summary_parts:
         summary_parts.append(reason)
     if error and error != reason:
         summary_parts.append(error)
@@ -124,13 +127,16 @@ Return JSON only:
 
 The request field must be a normal sentence. Never put an object, dict, list,
 credential schema, or raw input_request structure in it. If the deviation
-contains an input_request, summarize only the permission to ask for that one
-human-only input; the actual prompt happens later after approval.
+contains an input_request, tell the boss what kind of value or choice is needed,
+why it is needed, and that it can be provided through ctx. Never include the
+secret value itself.
 
-For human-input deviations, use verbs like "ask you to enter" or "ask you to
-provide". Never say "retrieve", "discover", "locate", "find", or "read" the
-value, because those imply machine-side inspection. If the machine can retrieve
-or locate it, it should stay internal instead of becoming a boss request."""
+For human-input deviations, use verbs like "enter" or "provide". Never say
+"retrieve", "discover", "locate", "find", or "read" the value, because those
+imply machine-side inspection. Never instruct the boss to SSH into the target,
+run commands there, edit a remote file, or finish the remote setup manually.
+If the machine can retrieve or locate the information itself, it should stay
+internal instead of becoming a boss request."""
     try:
         message = ask(
             settings,
@@ -161,7 +167,11 @@ or locate it, it should stay internal instead of becoming a boss request."""
             concrete = stored
         input_request = (deviation.get("request") or {}).get("input_request")
         if isinstance(input_request, dict) and not concrete:
-            concrete = "Allow me to request one human-only input needed for this step."
+            prompt_text = str(input_request.get("prompt", "the required value")).strip()
+            concrete = (
+                f"Provide this input through ctx: {prompt_text}. "
+                "You do not need to SSH into the target."
+            )
         if not concrete:
             raise ValueError("manager brief omitted the concrete request")
         value["request"] = concrete
