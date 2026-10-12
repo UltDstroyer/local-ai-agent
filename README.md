@@ -391,6 +391,14 @@ internally. Fresh owner approval is still required for critical disk/partition
 operations, SSH/authentication mutations, destructive lockout-prone network
 changes, reboots/power operations, and truly human-only inputs or secrets.
 
+Human-only input is always surfaced as a summarized deviation. The deviation
+states what value or choice is needed and why, without storing the value itself.
+For example, if a fresh Cloudflare Tunnel needs a token, ctx asks for that token
+in the deviation workflow. Approving the deviation prompts for the value locally,
+passes it ephemerally to the remote worker, and resumes the project. The agent
+must not tell the owner to SSH into the target, run remote commands, edit configs,
+or finish a remote setup step on its behalf.
+
 The SSH bridge uses BatchMode, disables password and keyboard-interactive
 prompts, and requires an already trusted host key. Connect to a machine manually
 with ssh once before registering it if its host key is not already present.
