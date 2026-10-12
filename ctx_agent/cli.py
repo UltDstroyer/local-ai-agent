@@ -946,6 +946,12 @@ def main(argv=None):
     item.add_argument("name")
     item.add_argument("ssh")
     item.add_argument("--port", type=int, default=22)
+    item.add_argument(
+        "--autonomy",
+        choices=("high", "restricted"),
+        default="high",
+        help="SSH trust mode; high runs goal-scoped projects hands-off",
+    )
 
     sub.add_parser("target-list")
     for cmd in ("target-show", "target-remove", "target-inspect"):
@@ -995,7 +1001,7 @@ def main(argv=None):
     data = {"op": args.action.replace("-", "_")}
     for field in (
         "project", "prompt", "goal", "id", "key", "text", "mode",
-        "name", "ssh", "port", "target", "message",
+        "name", "ssh", "port", "autonomy", "target", "message",
     ):
         if hasattr(args, field):
             value = getattr(args, field)
