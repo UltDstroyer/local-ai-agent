@@ -186,7 +186,7 @@ printf '%s\n' '=== service-config-metadata ==='
 for d in /etc/nginx/sites-enabled /etc/nginx/sites-available /etc/jellyfin /etc/cloudflared; do
   if [ -d "$d" ]; then
     printf '%s\n' "-- $d"
-    ls -la "$d" 2>/dev/null | sed -n '1,120p'
+    (sudo -n ls -la "$d" 2>/dev/null || ls -la "$d" 2>/dev/null) | sed -n '1,120p'
   fi
 done
 printf '%s\n' '=== media-roots ==='
