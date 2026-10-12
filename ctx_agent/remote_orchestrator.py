@@ -2593,6 +2593,7 @@ def run_remote_plan_step(
             dependency_key
             and not owner_action_approved
             and not dependency_preapproved
+            and dependency_key not in rejected_dependencies
             and plan.budget.allow_remote_admin
         ):
             plan = _amend_budget_for_action(plan, action)
