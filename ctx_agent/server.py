@@ -1602,7 +1602,11 @@ secret values or request secrets through chat; use the secure input flow.
     def remote_plan_worker(self):
         while not self.shutdown.is_set():
             try:
-                if self.paused or self.mode != "maximum":
+                # Remote work executes on the registered SSH target. Resource
+                # mode controls local model intensity, not remote authorization.
+                # A high-autonomy target may therefore keep moving in quiet or
+                # balanced mode after its project prompt is accepted.
+                if self.paused:
                     self.shutdown.wait(0.75)
                     continue
                 row = self.remote_store.next_plan()
