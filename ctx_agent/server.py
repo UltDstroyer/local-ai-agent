@@ -31,7 +31,7 @@ from .orchestrator import (
     restore_checkpoint,
     run_plan_step,
 )
-from .remote import RemoteContractError, RemoteTarget
+from .remote import RemoteContractError, RemotePlan, RemoteTarget
 from .remote_orchestrator import (
     RemoteOrchestrationError,
     approve_remote_deviation,
