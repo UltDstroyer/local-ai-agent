@@ -31,7 +31,7 @@ from .orchestrator import (
     restore_checkpoint,
     run_plan_step,
 )
-from .remote import RemoteContractError, RemoteTarget
+from .remote import RemoteContractError, RemotePlan, RemoteTarget
 from .remote_orchestrator import (
     RemoteOrchestrationError,
     approve_remote_deviation,
@@ -766,7 +766,10 @@ secret values or request secrets through chat; use the secure input flow.
             name = data.get("name", "")
             endpoint = data.get("ssh", "")
             port = data.get("port", 22)
-            target = RemoteTarget.parse_ssh(name, endpoint, port)
+            autonomy = data.get("autonomy", "high")
+            target = RemoteTarget.parse_ssh(
+                name, endpoint, port, autonomy=autonomy
+            )
             self.remote_store.put_target(target.to_dict())
             self.remote_store.event(None, "target_saved", target.name)
             return {"target": target.to_dict()}
@@ -824,6 +827,15 @@ secret values or request secrets through chat; use the secure input flow.
             context["owner_policy_snapshot"] = self._load_owner_policy()
             self.remote_store.update_plan(row["id"], context=context)
             row = self.remote_store.get_plan(row["id"])
+            target = RemoteTarget.from_dict(target_raw)
+            if target.autonomy == "high" and row.get("status") == "awaiting_approval":
+                if self.remote_store.approve_plan(row["id"]):
+                    self.remote_store.event(
+                        row["id"],
+                        "remote_plan_auto_approved_by_high_autonomy_target",
+                        target.name,
+                    )
+                    row = self.remote_store.get_plan(row["id"])
             return {"plan": self._remote_plan_view(row)}
         if op == "remote_plan_list":
             return {
@@ -1470,6 +1482,26 @@ secret values or request secrets through chat; use the secure input flow.
             row["id"],
             context=successor_context,
         )
+        parent_plan = RemotePlan.from_dict(
+            failed["plan"], failed["target"], failed["id"]
+        )
+        target = RemoteTarget.from_dict(target_raw)
+        if (
+            target.autonomy == "high"
+            and parent_plan.budget.allow_remote_admin
+            and row.get("status") == "awaiting_approval"
+        ):
+            if self.remote_store.approve_plan(row["id"]):
+                successor_context["inherited_owner_lease_from"] = failed["id"]
+                self.remote_store.update_plan(
+                    row["id"], context=successor_context
+                )
+                self.remote_store.event(
+                    row["id"],
+                    "remote_recovery_plan_inherited_owner_lease",
+                    failed["id"],
+                )
+                row = self.remote_store.get_plan(row["id"])
         context["recovery_plan_id"] = row["id"]
         context["recovery_plan_required"] = False
         context["recovery_delta"] = delta
@@ -1570,7 +1602,11 @@ secret values or request secrets through chat; use the secure input flow.
     def remote_plan_worker(self):
         while not self.shutdown.is_set():
             try:
-                if self.paused or self.mode != "maximum":
+                # Remote work executes on the registered SSH target. Resource
+                # mode controls local model intensity, not remote authorization.
+                # A high-autonomy target may therefore keep moving in quiet or
+                # balanced mode after its project prompt is accepted.
+                if self.paused:
                     self.shutdown.wait(0.75)
                     continue
                 row = self.remote_store.next_plan()
@@ -1640,24 +1676,34 @@ secret values or request secrets through chat; use the secure input flow.
                             missing = next((key for key in available if key not in live), "")
                             metadata = dict(context.get("input_requests", {})).get(missing, {})
                             if missing:
+                                refresh_prompt = str(
+                                    metadata.get("prompt", f"Re-enter {missing}")
+                                )[:300]
+                                refresh_reason = str(metadata.get(
+                                    "reason",
+                                    "The coordinator restarted, so the value is no longer in memory."
+                                ))[:600]
                                 refresh_request = {
                                     "type": "human_input_refresh",
+                                    "summary": (
+                                        f"I need the previously supplied input again: "
+                                        f"{refresh_prompt}. {refresh_reason}"
+                                    )[:900],
                                     "boss_request": (
-                                        "Allow me to ask you to re-enter one "
-                                        "ephemeral input that was lost after restart."
-                                    ),
-                                    "risk": "low",
+                                        f"Provide this input through ctx again: "
+                                        f"{refresh_prompt}. You do not need to SSH "
+                                        "into the target."
+                                    )[:500],
+                                    "risk": "medium" if metadata.get("sensitive") is True else "low",
                                     "input_request": {
                                         "key": missing,
-                                        "prompt": str(metadata.get("prompt", f"Re-enter {missing}"))[:300],
-                                        "reason": str(metadata.get(
-                                            "reason",
-                                            "The coordinator restarted, so the value is no longer in memory."
-                                        ))[:600],
+                                        "prompt": refresh_prompt,
+                                        "reason": refresh_reason,
                                         "sensitive": metadata.get("sensitive") is True,
                                     },
                                     "suggested_action": (
-                                        "Re-enter only this value; no new authority is requested."
+                                        "Enter only this value in ctx; no new remote "
+                                        "authority or manual server work is requested."
                                     ),
                                 }
                                 decision_key = owner_decision_key(refresh_request)
@@ -1762,8 +1808,10 @@ secret values or request secrets through chat; use the secure input flow.
                                         failure.get("error", "")
                                     )[:1800],
                                     "boss_request": (
-                                        "Restore or authorize SSH key access to "
-                                        f"{row['target']} so I can continue."
+                                        "Restore or authorize SSH access for "
+                                        f"{row['target']} from the controlling machine "
+                                        "or account so I can continue. Do not perform "
+                                        "the server setup manually."
                                     ),
                                     "risk": "medium",
                                     "suggested_action": (

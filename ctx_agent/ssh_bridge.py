@@ -176,6 +176,25 @@ for f in /etc/nginx/nginx.conf /etc/cloudflared/config.yml /etc/fstab; do
     ls -ld "$f" 2>/dev/null
   fi
 done
+printf '%s\n' '=== package-state ==='
+if command -v dpkg-query >/dev/null 2>&1; then
+  for p in jellyfin nginx cloudflared; do
+    dpkg-query -W -f='${Package} ${Status} ${Version}\n' "$p" 2>/dev/null || true
+  done
+fi
+printf '%s\n' '=== service-config-metadata ==='
+for d in /etc/nginx/sites-enabled /etc/nginx/sites-available /etc/jellyfin /etc/cloudflared; do
+  if [ -d "$d" ]; then
+    printf '%s\n' "-- $d"
+    (sudo -n ls -la "$d" 2>/dev/null || ls -la "$d" 2>/dev/null) | sed -n '1,120p'
+  fi
+done
+printf '%s\n' '=== media-roots ==='
+for d in /media /mnt /srv; do
+  if [ -d "$d" ]; then
+    find "$d" -maxdepth 2 -type d -printf '%m %u:%g %p\n' 2>/dev/null | sed -n '1,160p'
+  fi
+done
 """
 
 

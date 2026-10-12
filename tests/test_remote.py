@@ -18,6 +18,7 @@ from ctx_agent.remote import (
     validate_remote_action,
 )
 from ctx_agent.remote_orchestrator import (
+    _apply_target_autonomy,
     _ask_json_object,
     _auto_expand_execution_budget,
     _owner_action_key,
@@ -26,10 +27,12 @@ from ctx_agent.remote_orchestrator import (
     _completion_review,
     _critical_exec_key,
     _codex_manager_checkin_remote,
+    _dependency_in_plan_budget,
     _dependency_key,
     _dependency_owner_request,
     _dependency_preapproved,
     _dependency_request_from_checkin,
+    _human_input_deviation_request,
     _human_input_error,
     _is_remote_action_format_error,
     _manager_dependency_review,
@@ -82,6 +85,65 @@ def budget(**overrides):
 
 
 class RemoteContractTests(unittest.TestCase):
+
+    def test_target_defaults_to_high_autonomy(self):
+        target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
+        self.assertEqual(target.autonomy, "high")
+        self.assertEqual(target.to_dict()["autonomy"], "high")
+
+    def test_target_can_be_restricted(self):
+        target = RemoteTarget.parse_ssh(
+            "prod", "admin@example", autonomy="restricted"
+        )
+        self.assertEqual(target.autonomy, "restricted")
+        with self.assertRaises(RemoteContractError):
+            RemoteTarget.parse_ssh(
+                "bad", "admin@example", autonomy="unbounded"
+            )
+
+    def test_high_autonomy_is_visible_in_plan_contract(self):
+        raw = {
+            "goal": "Build media server",
+            "milestones": ["Install and configure services"],
+            "verification": ["HTTPS Jellyfin responds"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(
+                allow_sudo=False,
+                allow_package_install=False,
+                allow_network=False,
+                allow_remote_admin=False,
+            ),
+        }
+        target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi")
+        expanded = _apply_target_autonomy(raw, target)
+        remote_budget = expanded["remote_budget"]
+        self.assertTrue(remote_budget["allow_sudo"])
+        self.assertTrue(remote_budget["allow_package_install"])
+        self.assertTrue(remote_budget["allow_network"])
+        self.assertTrue(remote_budget["allow_remote_admin"])
+        self.assertTrue(any("High-autonomy SSH lease" in x for x in expanded["risks"]))
+
+    def test_restricted_target_does_not_expand_plan_authority(self):
+        raw = {
+            "goal": "Inspect server",
+            "milestones": ["Inspect"],
+            "verification": ["Done"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(
+                allow_sudo=False,
+                allow_package_install=False,
+                allow_network=False,
+                allow_remote_admin=False,
+            ),
+        }
+        target = RemoteTarget.parse_ssh(
+            "prod", "admin@example", autonomy="restricted"
+        )
+        expanded = _apply_target_autonomy(raw, target)
+        self.assertFalse(expanded["remote_budget"]["allow_remote_admin"])
+
     def test_target_parser(self):
         target = RemoteTarget.parse_ssh("pi", "pi@raspberrypi", 2222)
         self.assertEqual(target.user, "pi")
@@ -534,6 +596,55 @@ class RemoteStoreTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "cannot be resurrected"):
                 store.update_plan(plan.id, status="approved")
             self.assertEqual(store.get_plan(plan.id)["status"], "cancelled")
+
+
+    def test_plan_budget_counts_as_dependency_approval(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Build media server",
+            "milestones": ["Install services"],
+            "verification": ["Services active"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(),
+        }, "pi")
+        self.assertTrue(_dependency_in_plan_budget(
+            plan,
+            {"op": "package_install", "packages": ["jellyfin", "nginx"]},
+        ))
+        self.assertTrue(_dependency_in_plan_budget(
+            plan,
+            {
+                "op": "service",
+                "service": "cloudflared.service",
+                "action": "enable_now",
+            },
+        ))
+
+    def test_high_autonomy_manager_can_expand_routine_scope_without_owner(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Build media server",
+            "milestones": ["Configure reverse proxy"],
+            "verification": ["HTTPS works"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(allow_remote_admin=True),
+        }, "pi")
+        review = _manager_scope_review(
+            SimpleNamespace(),
+            plan,
+            "Configure reverse proxy",
+            {
+                "op": "write_file",
+                "path": "/etc/nginx/sites-available/media.conf",
+                "content": "server {}",
+                "mode": "0644",
+            },
+            "write outside remote scope",
+            "inspection",
+            "balanced",
+        )
+        self.assertTrue(review["approve"])
+        self.assertFalse(review["escalate"])
 
     def test_runtime_service_approval_does_not_authorize_persistent_enablement(self):
         approved = {"service:cloudflared:runtime"}
@@ -1310,6 +1421,35 @@ class BossManagerEmployeeInvariantTests(unittest.TestCase):
             )
 
 
+
+    def test_human_input_deviation_is_the_actual_owner_request(self):
+        plan = RemotePlan.from_dict({
+            "goal": "Expose Jellyfin",
+            "milestones": ["Configure Cloudflare tunnel"],
+            "verification": ["Public HTTPS works"],
+            "risks": [],
+            "assumptions": [],
+            "remote_budget": budget(allow_remote_admin=True),
+        }, "pi")
+        input_request = _normalize_human_input_request({
+            "key": "cloudflare_token",
+            "prompt": "Cloudflare Tunnel token",
+            "reason": "Needed to authenticate the tunnel.",
+            "sensitive": True,
+        })
+        request = _human_input_deviation_request(
+            plan,
+            "Configure Cloudflare tunnel",
+            input_request,
+            "The tunnel cannot authenticate without an owner-provided token.",
+        )
+        self.assertEqual(request["type"], "human_input")
+        self.assertIn("Cloudflare Tunnel token", request["summary"])
+        self.assertIn("Cloudflare Tunnel token", request["boss_request"])
+        self.assertIn("through ctx", request["boss_request"])
+        self.assertIn("do not need to SSH", request["boss_request"])
+        self.assertNotIn("allow me to ask", request["boss_request"].lower())
+        self.assertTrue(request["input_request"]["sensitive"])
 
     def test_secret_like_input_is_forced_sensitive(self):
         request = _normalize_human_input_request({

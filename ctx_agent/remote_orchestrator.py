@@ -21,6 +21,7 @@ from .remote import (
     action_deviation,
     canonical_service_name,
     critical_remote_exec_reason,
+    remote_service_allowed,
     validate_remote_action,
 )
 from .ssh_bridge import SSHBridgeError, ssh_bridge_call
@@ -174,6 +175,14 @@ Explicit owner work preferences and decision evidence:
 Treat explicit current instructions as higher priority than historical preference
 evidence. Past approvals are context, never blanket authorization.
 
+SSH targets declare an autonomy mode. For autonomy="high", the target is an
+owner-designated administrative sandbox: the project prompt itself authorizes
+routine goal-scoped sudo, package installation, service control, network access,
+configuration changes, and ordinary remote administration. Build a plan that can
+finish without repeated owner interruptions. Critical disk/partition, SSH or
+authentication, access-lockout/network, and power operations still require a
+fresh owner decision, as do genuinely human-only secrets or preferences.
+
 Create the smallest practical plan. Do not perform actions. Return JSON only:
 
 {{
@@ -249,10 +258,11 @@ authority or turn a previous approval into permanent permission.
 
 Preserve the technical plan when sound, but remove speculative paths, packages,
 services, domains, and capabilities. Backups must remain required where
-practical. If the owner explicitly requested hands-off administration, full
-control of the SSH target, broad cleanup, or rebuilding services in place,
-allow_remote_admin=true is permitted and should prevent avoidable manual
-handoffs. It grants arbitrary commands only on the named SSH target and never
+practical. When the target autonomy is "high", treat it as an owner-designated
+administrative sandbox: keep allow_remote_admin=true, allow_sudo=true,
+allow_package_install=true, and allow_network=true so routine on-task scope
+adjustments do not create babysitting handoffs. For restricted targets, broader
+authority still requires the usual explicit contract. It grants arbitrary commands only on the named SSH target and never
 on the desktop. Keep destructive actions tied directly to the stated goal,
 preserve SSH reachability until replacement access is verified, and never
 request or embed secret values. In remote_budget.allowed_domains, use exact
@@ -285,10 +295,12 @@ Codex concerns:
 Fresh inspection:
 {inspection[:12000]}
 
-Do not hide new authority inside the revision. New packages, services, sudo,
-network access, remote-admin authority, and write paths must remain visible in
-the contract and will still be subject to their normal owner gates during
-execution. Do not add speculative authority merely to satisfy Codex."""
+Do not hide new authority inside the revision. On high-autonomy SSH targets,
+routine on-task packages, services, sudo, network access, remote-admin commands,
+and write paths are covered by the approved project lease and may be narrowed
+or expanded by the manager without waking the owner. Critical destructive or
+lockout-prone operations remain separately gated. Do not add speculative
+authority merely to satisfy Codex."""
 
 
 def _agreement_prompt(plan: RemotePlan) -> str:
@@ -304,6 +316,33 @@ Return JSON only:
 }}
 
 Do not request broader authority merely for convenience."""
+
+
+def _apply_target_autonomy(raw: dict, target: RemoteTarget) -> dict:
+    """Make the remote-plan contract match the target's explicit autonomy mode."""
+    value = dict(raw) if isinstance(raw, dict) else {}
+    if target.autonomy != "high":
+        return value
+
+    budget = dict(value.get("remote_budget") or {})
+    budget["allow_sudo"] = True
+    budget["allow_package_install"] = True
+    budget["allow_network"] = True
+    budget["allow_remote_admin"] = True
+    value["remote_budget"] = budget
+
+    risks = list(value.get("risks") or [])
+    note = (
+        "High-autonomy SSH lease: after this project is submitted, routine sudo, "
+        "package installation, service control, network access, config changes, "
+        "and ordinary remote administration may proceed without repeated owner "
+        "approval. Critical disk, authentication, lockout/network, and power "
+        "operations still require a fresh owner decision."
+    )
+    if note not in risks:
+        risks.append(note)
+    value["risks"] = risks[:50]
+    return value
 
 
 def _repair_remote_plan_prompt(
@@ -355,6 +394,7 @@ def _validated_remote_plan(
     # implementation, but they may not rewrite, omit, or corrupt the request.
     canonical = dict(admin) if isinstance(admin, dict) else {}
     canonical["goal"] = goal
+    canonical = _apply_target_autonomy(canonical, target)
     try:
         return RemotePlan.from_dict(canonical, target.name, pid)
     except RemoteContractError as exc:
@@ -381,6 +421,7 @@ def _validated_remote_plan(
         )
         repaired = dict(repaired) if isinstance(repaired, dict) else {}
         repaired["goal"] = goal
+        repaired = _apply_target_autonomy(repaired, target)
         try:
             return RemotePlan.from_dict(repaired, target.name, pid)
         except RemoteContractError as repaired_exc:
@@ -632,9 +673,10 @@ may be used for other arbitrary maintenance on the SSH target, including
 filesystem cleanup, repository inspection, migrations, and work not expressible
 by typed actions. Set as_root=true only when root is needed. The remote command
 runs on the SSH target, not on the desktop. Never include secret tokens or
-passwords. If the approved contract is insufficient, propose the minimum
-required typed action anyway so ctx-agent can turn it into an owner-visible
-deviation request."""
+passwords. If the approved contract is insufficient, still propose the minimum required
+typed action. On a high-autonomy SSH lease, Qwen may expand routine package,
+service, path, or network scope itself. Only truly critical destructive or
+lockout-prone operations and human-only inputs should interrupt the owner."""
 
 
 def _human_input_error(input_request: object) -> str | None:
@@ -738,6 +780,37 @@ def _normalize_human_input_request(input_request: object) -> dict | None:
         "prompt": prompt_text,
         "reason": reason_text,
         "sensitive": sensitive,
+    }
+
+
+def _human_input_deviation_request(
+    plan: RemotePlan,
+    milestone: str,
+    input_request: dict,
+    reason: str = "",
+) -> dict:
+    """Build the one owner-facing deviation for a genuinely human-only input."""
+    prompt_text = str(input_request.get("prompt", "Provide the required value")).strip()
+    reason_text = str(reason or input_request.get("reason", "")).strip()
+    summary = (
+        f"I need one human-only input for {milestone}: {prompt_text}. "
+        + (reason_text if reason_text else "The machine cannot safely discover this value itself.")
+    ).strip()
+    return {
+        "type": "human_input",
+        "milestone": milestone,
+        "summary": summary[:900],
+        "reason": reason_text[:1800],
+        "boss_request": (
+            f"Provide this input through ctx: {prompt_text}. "
+            "You do not need to SSH into the target."
+        )[:500],
+        "risk": "medium" if input_request.get("sensitive") is True else "low",
+        "input_request": input_request,
+        "suggested_action": (
+            "Approve this deviation and enter only the requested value in ctx. "
+            "The value is passed ephemerally and is not written to the plan or logs."
+        ),
     }
 
 
@@ -1024,7 +1097,10 @@ If a human-only input is required, input_request must be exactly one object:
   "sensitive": true
 }}
 Never request multiple values together. Never include the value itself in your
-response, plan, context, or logs.
+response, plan, context, or logs. Never tell the owner to SSH into the target,
+run a remote command, inspect a remote file, or finish a remote setup step for
+you. If the owner alone can supply a value or make a choice, create one
+human-input deviation and ask for it through ctx.
 
 If the current approach is failing repeatedly, use the full inspection, results,
 verification criteria, and prior context to choose a materially different
@@ -1058,7 +1134,7 @@ strategy before escalating to the owner."""
             value["owner_needed"] = True
             if not value["owner_request"]:
                 value["owner_request"] = (
-                    "Allow me to request one human-only input needed for this step."
+                    "Provide the human-only input through ctx; no SSH to the target is required."
                 )
         if value["owner_needed"] and not value["owner_request"]:
             raise ValueError("owner_needed requires one concrete owner_request")
@@ -1176,7 +1252,7 @@ or command output. Qwen and Codex must inspect those themselves."""
         owner_request = value.get("owner_request", "")
         if not isinstance(owner_request, str) or not owner_request.strip():
             value["owner_request"] = (
-                "Allow me to request one human-only input needed for this step."
+                "Provide the human-only input through ctx; no SSH to the target is required."
             )
     return value
 
@@ -1271,6 +1347,16 @@ def _manager_scope_review(
     mode: str,
 ) -> dict:
     risk = _scope_risk(action)
+    if plan.budget.allow_remote_admin and risk != "high":
+        return {
+            "approve": True,
+            "escalate": False,
+            "risk": risk,
+            "reason": (
+                "covered by the owner-approved high-autonomy SSH project lease"
+            ),
+        }
+
     if isinstance(action, dict):
         op = action.get("op")
         if op in ("write_file", "ensure_dir"):
@@ -1777,6 +1863,34 @@ def _dependency_key(action: dict) -> str | None:
     return None
 
 
+def _dependency_in_plan_budget(plan: RemotePlan, action: dict) -> bool:
+    """Initial owner/project approval authorizes dependencies named in the plan."""
+    if not isinstance(action, dict):
+        return False
+    budget = plan.budget
+    op = action.get("op")
+    if op == "package_install":
+        packages = action.get("packages")
+        return bool(
+            budget.allow_sudo
+            and budget.allow_package_install
+            and budget.allow_network
+            and isinstance(packages, list)
+            and packages
+            and all(package in budget.allowed_packages for package in packages)
+        )
+    if op == "service":
+        service = action.get("service")
+        action_name = action.get("action")
+        return bool(
+            budget.allow_sudo
+            and isinstance(service, str)
+            and action_name in ("start", "restart", "enable", "enable_now")
+            and remote_service_allowed(service, budget.allowed_services)
+        )
+    return False
+
+
 def _dependency_preapproved(
     action: dict,
     approved_dependencies: set[str],
@@ -2172,19 +2286,12 @@ def run_remote_plan_step(
             )
             return
 
-        owner_request = {
-            "type": "human_input",
-            "milestone": plan.milestones[index],
-            "reason": input_review.get("reason", input_request["reason"]),
-            "boss_request": (
-                "Allow me to ask you for one human-only input needed for this step."
-            ),
-            "risk": "low" if not input_request["sensitive"] else "medium",
-            "input_request": input_request,
-            "suggested_action": (
-                "Provide only this one value; it will remain ephemeral."
-            ),
-        }
+        owner_request = _human_input_deviation_request(
+            plan,
+            plan.milestones[index],
+            input_request,
+            input_review.get("reason", input_request["reason"]),
+        )
         rejected_decisions = set(context.get("rejected_owner_decisions", []))
         decision_key = owner_decision_key(owner_request)
         if decision_key and decision_key in rejected_decisions:
@@ -2337,6 +2444,8 @@ def run_remote_plan_step(
             and isinstance(action.get("packages"), list)
             and len(action["packages"]) > 1
             and not _dependency_preapproved(action, approved_dependencies)
+            and not _dependency_in_plan_budget(plan, action)
+            and not plan.budget.allow_remote_admin
         ):
             context["next_guidance"] = (
                 "Qwen manager correction: new dependency approvals must be one "
@@ -2503,9 +2612,31 @@ def run_remote_plan_step(
                     )
                     return
         dependency_key = _dependency_key(action)
-        dependency_preapproved = _dependency_preapproved(
-            action, approved_dependencies
+        dependency_preapproved = (
+            _dependency_preapproved(action, approved_dependencies)
+            or _dependency_in_plan_budget(plan, action)
         )
+        if (
+            dependency_key
+            and not owner_action_approved
+            and not dependency_preapproved
+            and dependency_key not in rejected_dependencies
+            and plan.budget.allow_remote_admin
+        ):
+            plan = _amend_budget_for_action(plan, action)
+            approved_dependencies.add(dependency_key)
+            context["approved_dependencies"] = sorted(approved_dependencies)
+            remote_store.update_plan(
+                plan.id,
+                plan=plan.to_dict(),
+                context=context,
+            )
+            remote_store.event(
+                plan.id,
+                "remote_dependency_approved_by_project_lease",
+                dependency_key,
+            )
+            dependency_preapproved = True
         if dependency_key and dependency_key in rejected_dependencies:
             context["next_guidance"] = (
                 "The owner already rejected this exact dependency for this plan. "
@@ -3131,20 +3262,27 @@ def run_remote_plan_step(
                 replan.get("owner_needed") is True
                 and checkin.get("owner_needed") is True
             ):
-                owner_request = {
-                    "type": "manager_escalation",
-                    "milestone": plan.milestones[index],
-                    "reason": str(replan.get("why_different", ""))[:2000],
-                    "boss_request": str(
-                        checkin.get("owner_request")
-                        or replan.get("owner_request", "")
-                    )[:500],
-                    "risk": str(
-                        checkin.get("risk", replan.get("risk", "medium"))
-                    )[:16],
-                    "input_request": replan.get("input_request"),
-                    "suggested_action": context["next_guidance"],
-                }
+                if isinstance(replan.get("input_request"), dict):
+                    owner_request = _human_input_deviation_request(
+                        plan,
+                        plan.milestones[index],
+                        replan["input_request"],
+                        str(replan.get("why_different", ""))[:2000],
+                    )
+                else:
+                    owner_request = {
+                        "type": "manager_escalation",
+                        "milestone": plan.milestones[index],
+                        "reason": str(replan.get("why_different", ""))[:2000],
+                        "boss_request": str(
+                            checkin.get("owner_request")
+                            or replan.get("owner_request", "")
+                        )[:500],
+                        "risk": str(
+                            checkin.get("risk", replan.get("risk", "medium"))
+                        )[:16],
+                        "suggested_action": context["next_guidance"],
+                    }
                 if valid_remote_owner_request(owner_request):
                     rejected_decisions = set(context.get("rejected_owner_decisions", []))
                     decision_key = owner_decision_key(owner_request)
@@ -3387,15 +3525,22 @@ def run_remote_plan_step(
 
     attempts = int(row["attempts"]) + 1
     if review.get("owner_needed") is True:
-        owner_request = {
-            "type": "manager_escalation",
-            "milestone": plan.milestones[index],
-            "reason": review.get("reason", ""),
-            "boss_request": review.get("owner_request", ""),
-            "risk": review.get("risk", "medium"),
-            "input_request": review.get("input_request"),
-            "suggested_action": review.get("guidance", ""),
-        }
+        if isinstance(review.get("input_request"), dict):
+            owner_request = _human_input_deviation_request(
+                plan,
+                plan.milestones[index],
+                review["input_request"],
+                str(review.get("reason", "")),
+            )
+        else:
+            owner_request = {
+                "type": "manager_escalation",
+                "milestone": plan.milestones[index],
+                "reason": review.get("reason", ""),
+                "boss_request": review.get("owner_request", ""),
+                "risk": review.get("risk", "medium"),
+                "suggested_action": review.get("guidance", ""),
+            }
         if valid_remote_owner_request(owner_request):
             rejected_decisions = set(context.get("rejected_owner_decisions", []))
             decision_key = owner_decision_key(owner_request)
