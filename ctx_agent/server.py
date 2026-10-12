@@ -766,7 +766,10 @@ secret values or request secrets through chat; use the secure input flow.
             name = data.get("name", "")
             endpoint = data.get("ssh", "")
             port = data.get("port", 22)
-            target = RemoteTarget.parse_ssh(name, endpoint, port)
+            autonomy = data.get("autonomy", "high")
+            target = RemoteTarget.parse_ssh(
+                name, endpoint, port, autonomy=autonomy
+            )
             self.remote_store.put_target(target.to_dict())
             self.remote_store.event(None, "target_saved", target.name)
             return {"target": target.to_dict()}
@@ -824,6 +827,15 @@ secret values or request secrets through chat; use the secure input flow.
             context["owner_policy_snapshot"] = self._load_owner_policy()
             self.remote_store.update_plan(row["id"], context=context)
             row = self.remote_store.get_plan(row["id"])
+            target = RemoteTarget.from_dict(target_raw)
+            if target.autonomy == "high" and row.get("status") == "awaiting_approval":
+                if self.remote_store.approve_plan(row["id"]):
+                    self.remote_store.event(
+                        row["id"],
+                        "remote_plan_auto_approved_by_high_autonomy_target",
+                        target.name,
+                    )
+                    row = self.remote_store.get_plan(row["id"])
             return {"plan": self._remote_plan_view(row)}
         if op == "remote_plan_list":
             return {
@@ -1470,6 +1482,26 @@ secret values or request secrets through chat; use the secure input flow.
             row["id"],
             context=successor_context,
         )
+        parent_plan = RemotePlan.from_dict(
+            failed["plan"], failed["target"], failed["id"]
+        )
+        target = RemoteTarget.from_dict(target_raw)
+        if (
+            target.autonomy == "high"
+            and parent_plan.budget.allow_remote_admin
+            and row.get("status") == "awaiting_approval"
+        ):
+            if self.remote_store.approve_plan(row["id"]):
+                successor_context["inherited_owner_lease_from"] = failed["id"]
+                self.remote_store.update_plan(
+                    row["id"], context=successor_context
+                )
+                self.remote_store.event(
+                    row["id"],
+                    "remote_recovery_plan_inherited_owner_lease",
+                    failed["id"],
+                )
+                row = self.remote_store.get_plan(row["id"])
         context["recovery_plan_id"] = row["id"]
         context["recovery_plan_required"] = False
         context["recovery_delta"] = delta
