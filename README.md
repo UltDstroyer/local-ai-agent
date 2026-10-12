@@ -286,6 +286,17 @@ Register a target:
 
     ctx agent target add pi --ssh pi@raspberrypi
 
+SSH targets default to `high` autonomy. High-autonomy targets are intended to
+be disposable or owner-designated admin sandboxes: the remote project prompt is
+the authorization to carry out ordinary goal-scoped server administration.
+Planning remains visible in the audit trail, but the finished plan is
+auto-approved and can execute in quiet, balanced, or maximum resource mode.
+
+Use `restricted` for an SSH target you care about enough to require the older
+approval-by-approval posture:
+
+    ctx agent target add prod --ssh admin@prod --autonomy restricted
+
 Use a nonstandard SSH port if needed:
 
     ctx agent target add pi --ssh pi@raspberrypi --port 2222
@@ -309,7 +320,11 @@ local Qwen administrator narrows that plan into a remote mutation budget. The
 budget explicitly lists remote paths, services, packages, network permission,
 sudo permission, and action limits.
 
-Review it:
+On a high-autonomy target, no separate plan-approval command is required. The
+agent should continue from that one project prompt, self-repair ordinary
+technical failures, and inherit the same project lease across recovery replans.
+
+You can still inspect it at any time:
 
     ctx agent plan --target pi show
 
@@ -321,13 +336,14 @@ This reports the current remote stage, the full stage list, elapsed time, and a
 rough remaining-work estimate. The plan-show output also embeds the same
 progress snapshot.
 
-Approve it:
+Restricted targets still use explicit approval:
 
-    ctx agent approve --target pi
-    ctx agent mode maximum
+    ctx agent approve --target prod
 
-Only maximum mode leases remote milestones. Codex remains the primary engineer,
-but it cannot call SSH directly. It proposes typed actions and ctx-agent checks
+Remote execution is no longer tied to maximum mode. Resource mode controls the
+local Qwen workload; once a remote project is authorized, SSH work may continue
+in quiet, balanced, or maximum mode. Codex remains the primary engineer, but it
+cannot call SSH directly. It proposes typed actions and ctx-agent checks
 them against the owner-approved contract before the SSH bridge executes them.
 
 The normal typed action vocabulary supports:
@@ -355,7 +371,10 @@ If a later deviation is rejected, ctx-agent rolls back file and directory
 changes made during the current milestone before asking Codex for an
 in-contract alternative.
 
-If Codex needs authority it does not have, the project pauses:
+For high-autonomy targets, routine on-task package additions, service
+activation, config paths, external checks, and ordinary remote-admin commands
+are covered by the project lease and may be expanded by Qwen without pausing
+for the owner. If Codex needs authority outside that lease, the project pauses:
 
     ctx agent deviations --target pi
     ctx agent remote-deviation show DEVIATION_ID
@@ -365,9 +384,12 @@ or reject it:
 
     ctx agent remote-deviation reject DEVIATION_ID
 
-Examples of changes that become owner-visible deviations include an unexpected
-/etc path, a new package, a new systemd service, extra public network access, or
-exceeding the approved action/file-write budget.
+On restricted targets, examples of owner-visible deviations include an
+unexpected /etc path, a new package, a new systemd service, or extra public
+network access. On high-autonomy targets those routine changes are handled
+internally. Fresh owner approval is still required for critical disk/partition
+operations, SSH/authentication mutations, destructive lockout-prone network
+changes, reboots/power operations, and truly human-only inputs or secrets.
 
 The SSH bridge uses BatchMode, disables password and keyboard-interactive
 prompts, and requires an already trusted host key. Connect to a machine manually
